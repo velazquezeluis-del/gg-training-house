@@ -304,22 +304,7 @@ const db = {
   updateGymInfo: (data) => supa("gym_info?id=eq.1", {method:"PATCH",body:JSON.stringify(data)}),
 };
 
-// Supabase helpers
-const db = {
-  getUsers: () => supa("users?select=*&order=name"),
-  getUser: (id) => supa(`users?id=eq.${{id}}&select=*`).then(r => r?.[0]),
-  updateUser: (id, data) => supa(`users?id=eq.${{id}}`, { method: "PATCH", body: JSON.stringify(data) }),
-  getRoutines: () => supa("routines?select=id,name,days&order=name"),
-  getRoutine: (id) => supa(`routines?id=eq.${{id}}&select=*`).then(r => r?.[0]),
-  updateRoutine: (id, data) => supa(`routines?id=eq.${{id}}`, { method: "PATCH", body: JSON.stringify(data) }),
-  createRoutine: (data) => supa("routines", { method: "POST", body: JSON.stringify(data) }),
-  deleteRoutine: (id) => supa(`routines?id=eq.${{id}}`, { method: "DELETE" }),
-  getProgress: (userId, weekKey) => supa(`progress?user_id=eq.${{userId}}&week_key=eq.${{weekKey}}&select=*`),
-  saveProgress: (data) => supa("progress", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify(data) }),
-  deleteProgress: (userId, weekKey) => supa(`progress?user_id=eq.${{userId}}&week_key=eq.${{weekKey}}`, { method: "DELETE" }),
-  getGymInfo: () => supa("gym_info?select=*&limit=1").then(r => r?.[0] || {{}}),
-  updateGymInfo: (data) => supa("gym_info?id=eq.1", { method: "PATCH", body: JSON.stringify(data) }),
-};
+
 
 function compressImage(file, maxSize=200, q=0.75) {
   return new Promise((res,rej) => {

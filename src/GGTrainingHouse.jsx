@@ -689,7 +689,7 @@ function MemberView({ users, setUsers, photos, gymInfo }) {
     if(!selected||!routine) return;
     const day=routine.days[activeDay];
     if(!day) return;
-    const finished=day.blocks.every((_,bi)=>isBlockDone(activeDay,bi));
+    const finished=day.blocks.length>0 && day.blocks.every((_,bi)=>isBlockDone(activeDay,bi));
     if(finished){
       const today=todayKey();
       setTrainLog(prev=>{
@@ -817,11 +817,11 @@ function MemberView({ users, setUsers, photos, gymInfo }) {
 
   const isBlockDone=(di,bi)=>!!done[`${di}-${bi}`];
 
-  const allDone=routine&&routine.days[activeDay]
+  const allDone=routine&&routine.days[activeDay]&&routine.days[activeDay].blocks.length
     ?routine.days[activeDay].blocks.every((_,bi)=>isBlockDone(activeDay,bi))
     :false;
 
-  const dayDoneCheck=(di)=>routine&&routine.days[di]
+  const dayDoneCheck=(di)=>routine&&routine.days[di]&&routine.days[di].blocks.length
     ?routine.days[di].blocks.every((_,bi)=>isBlockDone(di,bi))
     :false;
 

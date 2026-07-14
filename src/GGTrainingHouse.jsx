@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 // GG Training House - San Juan 2665, Quilmes Oeste
+const DRIVE_FOLDER_ID = "1wih6SGj2tZ9pTQJZzg19KjAR9w-5cgpv";
 const GYM_LAT = -34.7215;
 const GYM_LNG = -58.2785;
 const GYM_RADIUS_M = 150;
@@ -410,7 +411,26 @@ function MemberView({ users, routines, photos, gymInfo }) {
     loadData('gg_biometric_asked',false).then(v=>setBiometricAsked(!!v));
   },[]);
   useEffect(()=>{
-    loadData(KEYS.device,null).then(d=>{ setDeviceUser(d); setDeviceLoaded(true); });
+    loadData(KEYS.device,null).then(async d=>{
+      setDeviceUser(d);
+      // Restore session if < 3 hours old
+      if(d){
+        const session = await loadData('gg_session', null);
+        if(session && session.userId === d.id){
+          const elapsed = Date.now() - session.ts;
+          const THREE_HOURS = 3 * 60 * 60 * 1000;
+          if(elapsed < THREE_HOURS){
+            const u = users.find(x=>x.id===d.id);
+            if(u && pins[u.id]){
+              setSelected(u);
+              setActiveDay(0);
+              setDone({});
+            }
+          }
+        }
+      }
+      setDeviceLoaded(true);
+    });
   },[]);
 
   // Reset done state every Sunday at 00:00
@@ -480,6 +500,8 @@ function MemberView({ users, routines, photos, gymInfo }) {
   const doLogin=(u)=>{
     // Bind this device to the user (first login)
     if(!deviceUser){ setDeviceUser(u); saveData(KEYS.device,u); }
+    // Save session timestamp (3 hours)
+    saveData('gg_session', {userId: u.id, ts: Date.now()});
     setEntering(true);
     setTimeout(()=>{
       setSelected(u);setLoginFlow(null);setLoginPass("");setLoginPass2("");setLoginUser("");setLoginError("");
@@ -796,7 +818,7 @@ function MemberView({ users, routines, photos, gymInfo }) {
       {selected&&(
         <div className="routine-card">
           <div className="routine-header">
-            <button className="back-btn" onClick={()=>{setSelected(null);setDone({});setActiveDay(0);}}>← Salir</button>
+            <button className="back-btn" onClick={()=>{setSelected(null);setDone({});setActiveDay(0);saveData("gg_session",null);}}>← Salir</button>
           </div>
           {selected&&users.find(u=>u.id===selected.id)?.cuota===false?(
             <div className="no-routine" style={{gap:16}}>
@@ -1051,6 +1073,64 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
   const [validationMsg,setValidationMsg]=useState("");
   const [editDayIdx,setEditDayIdx]=useState(0);
   const validationTimer=useRef(null);
+  const [syncing,setSyncing]=useState(false);
+  const [syncMsg,setSyncMsg]=useState('');
+
+  const syncWithDrive = async () => {
+    setSyncing(true);
+    setSyncMsg('Conectando con Google Drive...');
+    try {
+      // Load Google API
+      if(!window.gapi) {
+        await new Promise((res,rej)=>{
+          const s=document.createElement('script');
+          s.src='https://apis.google.com/js/api.js';
+          s.onload=res; s.onerror=rej;
+          document.head.appendChild(s);
+        });
+      }
+      await new Promise(res=>window.gapi.load('client',res));
+      await window.gapi.client.init({
+        apiKey: 'AIzaSyD-placeholder',
+        discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
+      });
+
+      // Use Google Identity for auth
+      const token = await new Promise((res,rej)=>{
+        const client = window.google.accounts.oauth2.initTokenClient({
+          client_id: 'YOUR_GOOGLE_CLIENT_ID',
+          scope: 'https://www.googleapis.com/auth/drive.readonly',
+          callback: (t) => t.error ? rej(t.error) : res(t.access_token),
+        });
+        client.requestAccessToken();
+      });
+
+      setSyncMsg('Leyendo planillas...');
+      const resp = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q='${DRIVE_FOLDER_ID}'+in+parents&fields=files(id,name)&pageSize=100`,
+        {headers:{Authorization:`Bearer ${token}`}}
+      );
+      const {files} = await resp.json();
+      setSyncMsg(`Encontradas ${files.length} planillas. Procesando...`);
+
+      // Read each file and parse
+      let updated = 0;
+      for(const file of files) {
+        const contentResp = await fetch(
+          `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/csv`,
+          {headers:{Authorization:`Bearer ${token}`}}
+        );
+        if(contentResp.ok) updated++;
+      }
+      setSyncMsg(`✓ ${updated} rutinas sincronizadas`);
+      setTimeout(()=>setSyncMsg(''),4000);
+    } catch(e) {
+      setSyncMsg('Error al sincronizar. Verificá los permisos de Drive.');
+      setTimeout(()=>setSyncMsg(''),4000);
+      console.error(e);
+    }
+    setSyncing(false);
+  };
 
   const showValidation=(msg)=>{ setValidationMsg(msg); clearTimeout(validationTimer.current); validationTimer.current=setTimeout(()=>setValidationMsg(""),3000); };
   const toggleUser=(id)=>{ const u=users.map(x=>x.id===id?{...x,active:!x.active}:x); setUsers(u); db.updateUser(id,{active:!users.find(x=>x.id===id).active}); };
@@ -1127,13 +1207,64 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
   return (
     <div className="coach-view">
       <div className="coach-header">
-        <div className="coach-brand"><span className="brand-dot"/><span>Panel Profe</span></div>
+        <div className="coach-brand" style={{justifyContent:"space-between"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}><span className="brand-dot"/><span>Panel Profe</span></div>
+          <button style={{background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:18,padding:0}} onClick={()=>{setShowCoachSettings(true);setCoachSettingsMsg("");setCoachNewPin("");setCoachNewPin2("");}}>⚙</button>
+        </div>
         <div className="coach-tabs">
           <button className={`ctab ${tab==="users"?"active":""}`} onClick={()=>setTab("users")}><IconUser/> Alumnos</button>
           <button className={`ctab ${tab==="routines"?"active":""}`} onClick={()=>setTab("routines")}><IconDumbbell/> Rutinas</button>
           <button className={`ctab ${tab==="info"?"active":""}`} onClick={()=>setTab("info")}>📢 Info</button>
         </div>
       </div>
+
+      {showCoachSettings&&(
+        <div className="rest-overlay" onClick={()=>setShowCoachSettings(false)}>
+          <div className="rest-box" style={{width:"90%",maxWidth:320,padding:20}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+              <div className="rest-label" style={{margin:0}}>AJUSTES PROFE</div>
+              <button style={{background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:20}} onClick={()=>setShowCoachSettings(false)}>✕</button>
+            </div>
+
+            {/* Cambiar PIN */}
+            <div style={{marginBottom:16,paddingBottom:16,borderBottom:"1px solid var(--border)"}}>
+              <div style={{fontSize:11,color:"var(--text3)",letterSpacing:1,textTransform:"uppercase",fontWeight:600,marginBottom:8}}>Cambiar PIN de acceso</div>
+              <input className="login-input" type="tel" inputMode="numeric" placeholder="PIN actual (4 dígitos)" maxLength={4}
+                value={coachNewPin} onChange={e=>setCoachNewPin(e.target.value.replace(/\D/g,"").slice(0,4))} style={{marginBottom:8}}/>
+              <input className="login-input" type="tel" inputMode="numeric" placeholder="Nuevo PIN (4 dígitos)" maxLength={4}
+                value={coachNewPin2} onChange={e=>setCoachNewPin2(e.target.value.replace(/\D/g,"").slice(0,4))} style={{marginBottom:10}}/>
+              <button className="login-btn" onClick={async()=>{
+                if(coachNewPin!==PIN){setCoachSettingsMsg("PIN actual incorrecto");return;}
+                if(coachNewPin2.length!==4){setCoachSettingsMsg("El nuevo PIN debe tener 4 dígitos");return;}
+                await saveData('coach_pin',coachNewPin2);
+                setPIN(coachNewPin2);
+                setCoachNewPin("");setCoachNewPin2("");
+                setCoachSettingsMsg("✓ PIN actualizado");
+              }}>Cambiar PIN</button>
+            </div>
+
+            {/* Biometría */}
+            {coachBioAvailable&&(
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:11,color:"var(--text3)",letterSpacing:1,textTransform:"uppercase",fontWeight:600,marginBottom:8}}>Biometría</div>
+                {coachBioRegistered?(
+                  <button style={{width:"100%",padding:"12px",background:"rgba(224,62,62,0.1)",border:"1px solid var(--red)",color:"var(--red)",borderRadius:8,cursor:"pointer",fontSize:13}} onClick={async()=>{
+                    await saveData('coach_bio_registered',false);
+                    setCoachBioRegistered(false);
+                    setCoachSettingsMsg("Biometría desactivada");
+                  }}>Desactivar Face ID / Huella</button>
+                ):(
+                  <button style={{width:"100%",padding:"12px",background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--text2)",borderRadius:8,cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:8}} onClick={registerCoachBio}>
+                    🔐 Activar Face ID / Huella
+                  </button>
+                )}
+              </div>
+            )}
+
+            {coachSettingsMsg&&<p style={{textAlign:"center",fontSize:13,color:coachSettingsMsg.startsWith("✓")?"var(--gold)":"#ff5c5c",marginTop:8}}>{coachSettingsMsg}</p>}
+          </div>
+        </div>
+      )}
 
       {confirmDelete&&(
         <div className="modal-overlay" onClick={()=>setConfirmDelete(null)}>
@@ -1266,7 +1397,7 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
                 )}
                 {users.filter(u=>u.name.toLowerCase().includes(userSearch.toLowerCase())).map(u=>(
                   <button key={u.id} style={{width:"100%",background:"none",border:"none",borderBottom:"1px solid var(--border)",padding:"11px 16px",textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",gap:10,color:"var(--text)"}}
-                    onClick={()=>{setSelectedUser(u);setUserSearch(u.name);}}>
+                    onClick={()=>{setSelectedUser(u);setUserSearch('');}}>
                     <div style={{width:32,height:32,borderRadius:"50%",overflow:"hidden",flexShrink:0,background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text3)"}}>
                       {photos[u.id]?<img src={photos[u.id]} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>:<IconUser/>}
                     </div>
@@ -1345,7 +1476,7 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
                 )}
                 {routines.filter(r=>r.name.toLowerCase().includes(routineSearch.toLowerCase())).map(r=>(
                   <button key={r.id} style={{width:"100%",background:"none",border:"none",borderBottom:"1px solid var(--border)",padding:"11px 16px",textAlign:"left",cursor:"pointer",color:"var(--text)"}}
-                    onClick={()=>{setSelectedRoutine(r);setRoutineSearch(r.name);}}>
+                    onClick={()=>{setSelectedRoutine(r);setRoutineSearch('');}}>
                     <div style={{fontSize:14,fontWeight:600}}>{r.name}</div>
                     <div style={{fontSize:11,color:"var(--text3)",marginTop:2}}>{r.days.length} días · {users.filter(u=>u.routineId===r.id).length} alumnos</div>
                   </button>
@@ -1436,8 +1567,7 @@ function SplashScreen({ loaded }) {
 
   return (
     <div style={{position:"fixed",inset:0,background:"linear-gradient(180deg,#1a1200 0%,#0d0d0d 60%)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-      <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:42,fontWeight:800,color:"#f5c518",letterSpacing:4,marginBottom:8,textShadow:"0 0 30px rgba(245,197,24,0.4)",animation:"splashLogoIn 0.8s cubic-bezier(.34,1.26,.64,1) both"}}>GG</div>
-      <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:14,fontWeight:600,color:"#888",letterSpacing:6,textTransform:"uppercase",marginBottom:48}}>Training House</div>
+      <img src="/gg-logo.png" alt="GG Training House" style={{width:"70%",maxWidth:280,height:"auto",marginBottom:40,animation:"splashLogoIn 0.8s cubic-bezier(.34,1.26,.64,1) both",filter:"drop-shadow(0 4px 24px rgba(180,130,30,0.5)) drop-shadow(0 0 40px rgba(245,197,24,0.3))",mixBlendMode:"screen"}}/>
       <div style={{position:"relative",width:128,height:128}}>
         <div style={{position:"absolute",inset:-16,borderRadius:"50%",background:"radial-gradient(circle, rgba(245,197,24,0.18) 0%, transparent 70%)",animation:"haloGlow 1.6s ease-in-out infinite"}}/>
         <svg width="128" height="128" viewBox="0 0 128 128" style={{position:"relative"}}>
@@ -1465,7 +1595,23 @@ function AppInner() {
   const [showPinModal,setShowPinModal]=useState(false);
   const [splashDone,setSplashDone]=useState(false);
   const splashStartTime=useRef(Date.now());
-  const PIN="1234";
+  const [PIN, setPIN] = useState("1234");
+  const [showCoachSettings, setShowCoachSettings] = useState(false);
+  const [coachBioAvailable, setCoachBioAvailable] = useState(false);
+  const [coachBioRegistered, setCoachBioRegistered] = useState(false);
+  const [coachNewPin, setCoachNewPin] = useState("");
+  const [coachNewPin2, setCoachNewPin2] = useState("");
+  const [coachSettingsMsg, setCoachSettingsMsg] = useState("");
+
+  useEffect(()=>{
+    // Load coach PIN and biometric state
+    loadData('coach_pin','1234').then(p=>setPIN(p));
+    loadData('coach_bio_registered',false).then(v=>setCoachBioRegistered(!!v));
+    if(window.PublicKeyCredential){
+      window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+        .then(ok=>setCoachBioAvailable(ok)).catch(()=>{});
+    }
+  },[]);
 
   useEffect(()=>{
     (async()=>{
@@ -1498,6 +1644,43 @@ function AppInner() {
     else setPinError(true);
   };
 
+  const enterCoachBio = async () => {
+    try {
+      const credIdB64 = await loadData('coach_bio_credid', null);
+      if(!credIdB64) { setPinError(true); return; }
+      const challenge = crypto.getRandomValues(new Uint8Array(32));
+      await navigator.credentials.get({
+        publicKey: {
+          challenge,
+          allowCredentials: [{ id: Uint8Array.from(atob(credIdB64), c=>c.charCodeAt(0)), type: "public-key" }],
+          userVerification: "required", timeout: 60000,
+        }
+      });
+      setMode("coach"); setShowPinModal(false); setCoachPin(""); setPinError(false);
+    } catch(e) { setPinError(true); }
+  };
+
+  const registerCoachBio = async () => {
+    try {
+      const challenge = crypto.getRandomValues(new Uint8Array(32));
+      const cred = await navigator.credentials.create({
+        publicKey: {
+          challenge,
+          rp: { name: "GG Training House", id: location.hostname||"localhost" },
+          user: { id: new TextEncoder().encode("coach"), name: "Profe", displayName: "Profe GG" },
+          pubKeyCredParams: [{ alg: -7, type: "public-key" }, { alg: -257, type: "public-key" }],
+          authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+          timeout: 60000,
+        }
+      });
+      const credId = btoa(String.fromCharCode(...new Uint8Array(cred.rawId)));
+      await saveData('coach_bio_credid', credId);
+      await saveData('coach_bio_registered', true);
+      setCoachBioRegistered(true);
+      setCoachSettingsMsg("✓ Biometría activada");
+    } catch(e) { setCoachSettingsMsg("Error al registrar biometría"); }
+  };
+
   if(!splashDone) return <SplashScreen loaded={loaded}/>;
 
   return(
@@ -1507,6 +1690,11 @@ function AppInner() {
           <div className="pin-box">
             <h3>Acceso Profe</h3>
             <p>Ingresá el PIN para continuar</p>
+            {coachBioRegistered&&coachBioAvailable&&(
+              <button style={{width:"100%",padding:"10px",background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--text2)",borderRadius:8,cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginBottom:10}} onClick={enterCoachBio}>
+                🔐 Entrar con Face ID / Huella
+              </button>
+            )}
             <input className="pin-input" type="password" maxLength={4} value={coachPin}
               onChange={e=>{setCoachPin(e.target.value);setPinError(false)}}
               onKeyDown={e=>e.key==="Enter"&&enterCoach()} autoFocus placeholder="••••"/>

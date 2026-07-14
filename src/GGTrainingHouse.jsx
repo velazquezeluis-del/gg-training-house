@@ -2160,6 +2160,18 @@ function AppInner() {
   const COACH_SESSION_MS = 6*60*60*1000;
 
   useEffect(()=>{
+    // If this is a fresh deploy (build id changed since last visit), reset any
+    // "stay logged in" state so the app starts clean instead of jumping into
+    // whatever tab/session was active before the update.
+    try {
+      const currentBuild = typeof __APP_BUILD__ !== "undefined" ? __APP_BUILD__ : null;
+      const lastBuild = localStorage.getItem('app_build');
+      if(currentBuild && lastBuild !== currentBuild){
+        localStorage.removeItem('coach_session');
+        localStorage.setItem('app_build', currentBuild);
+      }
+    } catch(e){}
+
     // Load coach PIN and biometric state
     loadData('coach_pin','1234').then(p=>setPIN(p));
     loadData('coach_bio_registered',false).then(v=>setCoachBioRegistered(!!v));

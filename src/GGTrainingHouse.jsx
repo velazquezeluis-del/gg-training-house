@@ -1456,14 +1456,11 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
       files.forEach(f=>{ lastModifiedRef.current[f.id]=f.modifiedTime; });
       if(!files.length){ setSyncMsg('No se encontraron planillas en la carpeta.'); setSyncing(false); return; }
 
-      let updatedCount=0; const failed=[]; const noMatch=[];
+      let createdCount=0, updatedCount=0; const failed=[];
       for(let i=0;i<files.length;i++){
         const file=files[i];
         setSyncMsg(`Procesando ${i+1}/${files.length}: ${file.name}...`);
         try{
-          const matchedUser = users.find(u=>u.name.trim().toLowerCase()===file.name.trim().toLowerCase());
-          if(!matchedUser){ noMatch.push(file.name); continue; }
-
           const sheetResp = await fetch(
             `https://sheets.googleapis.com/v4/spreadsheets/${file.id}?includeGridData=true&fields=sheets(data(rowData(values(formattedValue))),merges)`,
             {headers:{Authorization:`Bearer ${token}`}}
@@ -1475,19 +1472,29 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
           const routine = parseRoutineFromGrid(file.name, grid);
           if(!routine.days.length){ failed.push(`${file.name} (sin días detectados)`); continue; }
 
-          await db.updateUser(matchedUser.id, {days:routine.days, drive_file_id:file.id});
-          setUsers(us=>us.map(u=>u.id===matchedUser.id?{...u,days:routine.days,driveFileId:file.id}:u));
-          updatedCount++;
+          const matchedUser = users.find(u=>u.name.trim().toLowerCase()===file.name.trim().toLowerCase());
+          if(matchedUser){
+            await db.updateUser(matchedUser.id, {days:routine.days, drive_file_id:file.id});
+            setUsers(us=>us.map(u=>u.id===matchedUser.id?{...u,days:routine.days,driveFileId:file.id}:u));
+            updatedCount++;
+          } else {
+            const createdRows = await db.createUser({name:routine.name.trim(), active:true, cuota:true, days:routine.days, drive_file_id:file.id});
+            if(createdRows?.[0]){
+              setUsers(us=>[...us, {id:createdRows[0].id, name:routine.name.trim(), active:true, cuota:true, days:routine.days, driveFileId:file.id, photo:null, startDate:null}]);
+              createdCount++;
+            } else {
+              failed.push(`${file.name} (no se pudo crear el alumno)`);
+            }
+          }
         } catch(e){
           console.error(e);
           failed.push(file.name);
         }
       }
 
-      setSyncMsg(`✓ Listo: ${updatedCount} rutinas actualizadas`
-        + `${noMatch.length?` — ⚠️ ${noMatch.length} planilla(s) sin alumno con ese nombre: ${noMatch.join(', ')}`:''}`
+      setSyncMsg(`✓ Listo: ${createdCount} alumno(s) nuevo(s), ${updatedCount} rutinas actualizadas`
         + `${failed.length?` — ⚠️ ${failed.length} con error: ${failed.join(', ')}`:''}`);
-      setTimeout(()=>setSyncMsg(''), (failed.length||noMatch.length) ? 20000 : 8000);
+      setTimeout(()=>setSyncMsg(''), failed.length ? 20000 : 8000);
     } catch(e) {
       console.error(e);
       setSyncMsg('Error al sincronizar. Verificá el Client ID y los permisos de Drive.');

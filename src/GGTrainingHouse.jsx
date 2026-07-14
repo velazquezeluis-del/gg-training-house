@@ -7,6 +7,10 @@ const DRIVE_FOLDER_ID = "1wih6SGj2tZ9pTQJZzg19KjAR9w-5cgpv";
 // credencial -> ID de cliente de OAuth -> Aplicación web -> agregar el dominio de
 // Netlify (https://tu-app.netlify.app) en "Orígenes autorizados de JavaScript".
 const GOOGLE_CLIENT_ID = "979691772186-qgrn7dh0v49t5bq1it0u690gcr9pahs3.apps.googleusercontent.com";
+function driveFilesListUrl(){
+  const q = `'${DRIVE_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
+  return `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+}
 const GYM_LAT = -34.7215;
 const GYM_LNG = -58.2785;
 const GYM_RADIUS_M = 150;
@@ -1424,7 +1428,7 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
     if(!driveTokenRef.current.token || Date.now()>=driveTokenRef.current.expiresAt) return;
     try {
       const listResp = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q='${DRIVE_FOLDER_ID}'+in+parents+and+mimeType='application/vnd.google-apps.spreadsheet'&fields=files(id,name,modifiedTime)&pageSize=200`,
+        driveFilesListUrl(),
         {headers:{Authorization:`Bearer ${driveTokenRef.current.token}`}}
       );
       const listData = await listResp.json();
@@ -1457,10 +1461,15 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
 
       setSyncMsg('Buscando planillas...');
       const listResp = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q='${DRIVE_FOLDER_ID}'+in+parents+and+mimeType='application/vnd.google-apps.spreadsheet'&fields=files(id,name,modifiedTime)&pageSize=200`,
+        driveFilesListUrl(),
         {headers:{Authorization:`Bearer ${token}`}}
       );
       const listData = await listResp.json();
+      if(listData.error){
+        setSyncMsg(`⚠️ Error de Google Drive: ${listData.error.message||JSON.stringify(listData.error)}`);
+        setTimeout(()=>setSyncMsg(''),15000);
+        setSyncing(false); return;
+      }
       const files = (listData.files||[]).filter(f=>!/protocolo/i.test(f.name));
       files.forEach(f=>{ lastModifiedRef.current[f.id]=f.modifiedTime; });
       if(!files.length){ setSyncMsg('No se encontraron planillas en la carpeta.'); setSyncing(false); return; }

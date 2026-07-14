@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 // GG Training House - San Juan 2665, Quilmes Oeste
 const DRIVE_FOLDER_ID = "1wih6SGj2tZ9pTQJZzg19KjAR9w-5cgpv";
+// TODO (una sola vez): reemplazar por el Client ID real de Google Cloud Console.
+// Pasos: console.cloud.google.com -> crear proyecto -> habilitar "Google Drive API" y
+// "Google Sheets API" -> Pantalla de consentimiento OAuth -> Credenciales -> Crear
+// credencial -> ID de cliente de OAuth -> Aplicación web -> agregar el dominio de
+// Netlify (https://tu-app.netlify.app) en "Orígenes autorizados de JavaScript".
+const GOOGLE_CLIENT_ID = "979691772186-qgrn7dh0v49t5bq1it0u690gcr9pahs3.apps.googleusercontent.com";
 const GYM_LAT = -34.7215;
 const GYM_LNG = -58.2785;
 const GYM_RADIUS_M = 150;
@@ -14,9 +20,19 @@ const supa = (path, opts={}) => fetch(`${SUPA_URL}/rest/v1/${path}`, {
 }).then(r => r.ok ? r.json() : r.text().then(t => { console.error(t); return null; }));
 
 function GGApp() {
+  useEffect(()=>{
+    // Needed so iOS Safari actually applies :active styles on tap
+    const noop = ()=>{};
+    document.addEventListener('touchstart', noop, {passive:true});
+    return ()=>document.removeEventListener('touchstart', noop);
+  },[]);
   return (
     <>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,300;0,600;0,700;0,800;1,600&family=Barlow:wght@400;500;600&display=swap'); *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+ button{-webkit-tap-highlight-color:transparent;transition:transform .05s ease,filter .05s ease,opacity .05s ease}
+ button:active:not(:disabled){transform:scale(0.92);filter:brightness(0.85)}
+ .tap-effect{-webkit-tap-highlight-color:transparent;transition:transform .05s ease,filter .05s ease,opacity .05s ease}
+ .tap-effect:active{transform:scale(0.92);filter:brightness(0.82)}
  :root{ --bg:#0d0d0d;--surface:#161616;--surface2:#1f1f1f;--surface3:#282828; --border:#2a2a2a;--gold:#f5c518;--gold2:#e8b800;--gold-dim:rgba(245,197,24,0.12); --red:#e03e3e;--green:#3ecf8e;--teal:#3ecfcf;--purple:#a78bfa; --text:#f0f0f0;--text2:#aaa;--text3:#666; --radius:12px;--font-display:'Barlow Condensed',sans-serif;--font-body:'Barlow',sans-serif; }
  html,body,#root{height:100%;background:var(--bg);color:var(--text);font-family:var(--font-body)}
  .app-shell{min-height:100dvh;display:flex;flex-direction:column;max-width:480px;margin:0 auto;background:var(--bg)}
@@ -63,6 +79,9 @@ function GGApp() {
  .login-name{font-family:var(--font-display);font-size:20px;font-weight:700;color:var(--text);margin-bottom:4px}
  .login-title{font-family:var(--font-display);font-size:20px;font-weight:700;color:var(--text);margin-bottom:4px;align-self:flex-start}
  .login-input{width:100%;padding:12px 14px;background:var(--surface);border:1.5px solid var(--border);border-radius:10px;color:var(--text);font-size:15px;outline:none;box-sizing:border-box}
+ .pw-wrap{position:relative;width:100%}
+ .pw-wrap .login-input{padding-right:44px}
+ .pw-eye{position:absolute;top:0;right:0;height:100%;width:44px;background:none;border:none;color:var(--text3);cursor:pointer;display:flex;align-items:center;justify-content:center}
  .login-input:focus{border-color:var(--gold)}
  .login-error{color:#ff5c5c;font-size:12px;margin:0;text-align:center}
  .login-btn{width:100%;padding:13px;background:var(--gold);color:#0f0f0f;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;letter-spacing:.5px}
@@ -163,6 +182,12 @@ function GGApp() {
  .btn-primary.sm{padding:8px 14px;font-size:13px}
  .btn-save{display:flex;align-items:center;gap:6px;padding:12px 24px;border-radius:8px;background:var(--gold);color:#000;border:none;font-family:var(--font-display);font-size:16px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;cursor:pointer}
  .btn-ghost{padding:10px 16px;border-radius:8px;background:none;border:1px solid var(--border);color:var(--text2);font-family:var(--font-body);font-size:14px;cursor:pointer;transition:all .15s}
+ .btn-sync{display:flex;align-items:center;gap:7px;padding:9px 14px;border-radius:999px;background:linear-gradient(135deg,rgba(245,197,24,0.12),rgba(245,197,24,0.04));border:1px solid rgba(245,197,24,0.35);color:var(--gold);font-family:var(--font-body);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s}
+ .btn-sync:hover:not(:disabled){background:linear-gradient(135deg,rgba(245,197,24,0.2),rgba(245,197,24,0.08));border-color:var(--gold)}
+ .btn-sync:disabled{opacity:.7;cursor:default}
+ .btn-sync .sync-icon{display:flex;transition:transform .2s}
+ .btn-sync.spinning .sync-icon{animation:syncSpin 1s linear infinite}
+ @keyframes syncSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
  .btn-ghost:hover{background:var(--surface2)}
  .btn-ghost.sm{padding:8px 12px;font-size:13px}
  .btn-icon{padding:8px;border-radius:8px;background:var(--surface3);border:1px solid var(--border);color:var(--text2);cursor:pointer;display:flex;transition:all .15s}
@@ -271,9 +296,22 @@ function GGApp() {
 
 const KEYS = { users: "gg_users", routines: "gg_routines", photos: "gg_photos", log: "gg_log", pins: "gg_pins", info: "gg_info", device: "gg_device", weekReset: "gg_week_reset" };
 
-const mkEx = (o={}) => ({ name:"", sets:3, measType:"reps", reps:"", secs:"", rest:"60s", notes:"", ...o });
+const mkWeek = ()=>({reps:"",kg:""});
+const mkEx = (o={}) => ({ name:"", sets:3, measType:"reps", reps:"", secs:"", rest:"60s", notes:"", weeks:[mkWeek(),mkWeek(),mkWeek(),mkWeek()], rpe:["","","",""], ...o });
 const mkBlock = (type="block", name="") => ({ id: Date.now()+Math.random(), type, name, exercises:[mkEx()] });
 const mkWarmup = () => ({ id: Date.now()+Math.random(), type:"warmup", name:"Entrada en calor / Movilidad", exercises:[mkEx()] });
+// Reads the value for a given program week (1-4), falling back to the old flat
+// reps/secs fields for exercises created before the weekly-progression feature.
+function getWeekData(ex, weekNum){
+  const idx = Math.min(4, Math.max(1, weekNum||1)) - 1;
+  const w = ex.weeks && ex.weeks[idx];
+  if(w && (w.reps || w.kg)) return w;
+  return { reps: ex.measType==="secs" ? ex.secs : ex.reps, kg:"" };
+}
+function getWeekRPE(ex, weekNum){
+  const idx = Math.min(4, Math.max(1, weekNum||1)) - 1;
+  return (ex.rpe && ex.rpe[idx]) || "";
+}
 
 const defaultUsers = [{"id":1,"name":"NATALIA AMARILLA","active":true,"routineId":1,"cuota":true},{"id":2,"name":"PULPO","active":true,"routineId":2,"cuota":true},{"id":3,"name":"FACUNDO MARINOVICH","active":true,"routineId":22,"cuota":true},{"id":4,"name":"ANDREA DORZAGARAY","active":true,"routineId":21,"cuota":true},{"id":5,"name":"FEDERICO MALTES","active":true,"routineId":5,"cuota":true},{"id":6,"name":"MAIA GONZALEZ","active":true,"routineId":49,"cuota":true},{"id":7,"name":"LEON","active":true,"routineId":48,"cuota":true},{"id":8,"name":"SELENE BALLON","active":true,"routineId":26,"cuota":true},{"id":9,"name":"TOMAS DUARTE","active":true,"routineId":37,"cuota":true},{"id":10,"name":"JULIAN STURTZ","active":true,"routineId":9,"cuota":true},{"id":11,"name":"STELLA","active":true,"routineId":12,"cuota":true},{"id":12,"name":"KAREN G.","active":true,"routineId":6,"cuota":true},{"id":13,"name":"FACHA","active":true,"routineId":16,"cuota":true},{"id":14,"name":"MORE","active":true,"routineId":18,"cuota":true},{"id":15,"name":"SANDRA ÑAÑEZ","active":true,"routineId":20,"cuota":true},{"id":16,"name":"CAMILO","active":true,"routineId":28,"cuota":true},{"id":17,"name":"MELANY COBER","active":true,"routineId":17,"cuota":true},{"id":18,"name":"RUBEN","active":true,"routineId":27,"cuota":true},{"id":19,"name":"BENJAMIN GOMEZ 10","active":true,"routineId":35,"cuota":true},{"id":20,"name":"RODRIGO","active":true,"routineId":10,"cuota":true},{"id":21,"name":"LIZI","active":true,"routineId":23,"cuota":true},{"id":22,"name":"MICAELA DALLURA","active":true,"routineId":13,"cuota":true},{"id":23,"name":"LUIS VELAZQUEZ","active":true,"routineId":50,"cuota":true},{"id":24,"name":"CAMILA COSENTINO","active":true,"routineId":3,"cuota":true},{"id":25,"name":"ALE ROCA","active":true,"routineId":15,"cuota":true},{"id":26,"name":"MAXI MARITANO","active":true,"routineId":8,"cuota":true},{"id":27,"name":"CANDELA ROSALES","active":true,"routineId":33,"cuota":true},{"id":28,"name":"BRENDA","active":true,"routineId":34,"cuota":true},{"id":29,"name":"YASMIN GENTILE","active":true,"routineId":36,"cuota":true},{"id":30,"name":"JULIETA ÑAÑEZ","active":true,"routineId":4,"cuota":true},{"id":31,"name":"ORNELA","active":true,"routineId":25,"cuota":true},{"id":32,"name":"MIGUEL","active":true,"routineId":11,"cuota":true},{"id":33,"name":"FRANCO","active":true,"routineId":38,"cuota":true},{"id":34,"name":"SANTIAGO y BENJA LAGO","active":true,"routineId":47,"cuota":true},{"id":35,"name":"BELEN","active":true,"routineId":19,"cuota":true},{"id":36,"name":"LUCAS","active":true,"routineId":24,"cuota":true},{"id":37,"name":"OLIVIA","active":true,"routineId":46,"cuota":true},{"id":38,"name":"LARA ÑAÑEZ","active":true,"routineId":39,"cuota":true},{"id":39,"name":"ROMAN Y GONZALO","active":true,"routineId":32,"cuota":true},{"id":40,"name":"MARY LUPO","active":true,"routineId":29,"cuota":true},{"id":41,"name":"ESTEBAN","active":true,"routineId":40,"cuota":true},{"id":42,"name":"SANTIAGO BUDASSI","active":true,"routineId":41,"cuota":true},{"id":43,"name":"CLAUDIA GIORGETTI","active":true,"routineId":7,"cuota":true},{"id":44,"name":"NOVIA DE YOKO","active":true,"routineId":42,"cuota":true},{"id":45,"name":"NADA","active":true,"routineId":43,"cuota":true},{"id":46,"name":"SANTIAGO GOMEZ 13","active":true,"routineId":44,"cuota":true},{"id":47,"name":"MAYLEN ARRARAS","active":true,"routineId":45,"cuota":true},{"id":48,"name":"BENJAMIN LAGO","active":true,"routineId":null,"cuota":true}];;
 
@@ -294,7 +332,7 @@ const db = {
   updateUser: (id, data) => supa(`users?id=eq.${id}`, {method:"PATCH",body:JSON.stringify(data)}),
   createUser: (data) => supa("users", {method:"POST",body:JSON.stringify(data)}),
   deleteUser: (id) => supa(`users?id=eq.${id}`, {method:"DELETE"}),
-  getRoutines: () => supa("routines?select=id,name,days&order=name"),
+  getRoutines: () => supa("routines?select=id,name,days,drive_file_id&order=name"),
   updateRoutine: (id, data) => supa(`routines?id=eq.${id}`, {method:"PATCH",body:JSON.stringify(data)}),
   createRoutine: (data) => supa("routines", {method:"POST",body:JSON.stringify(data)}),
   deleteRoutine: (id) => supa(`routines?id=eq.${id}`, {method:"DELETE"}),
@@ -303,6 +341,8 @@ const db = {
   deleteProgress: (userId, weekKey) => supa(`progress?user_id=eq.${userId}&week_key=eq.${weekKey}`, {method:"DELETE"}),
   getGymInfo: () => supa("gym_info?select=*&limit=1").then(r=>r?.[0]||{}),
   updateGymInfo: (data) => supa("gym_info?id=eq.1", {method:"PATCH",body:JSON.stringify(data)}),
+  getTrainingLogAll: () => supa("training_log?select=user_id,date"),
+  markTrained: (userId, date) => supa("training_log", {method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=representation"}, body:JSON.stringify({user_id:userId, date})}),
 };
 
 
@@ -357,6 +397,9 @@ const IconEdit=()=><Icon d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 
 const IconCheck=()=><Icon d="M20 6L9 17l-5-5"/>;
 const IconX=()=><Icon d="M18 6L6 18M6 6l12 12"/>;
 const IconLock=()=><Icon d="M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2zM7 11V7a5 5 0 0 1 10 0v4"/>;
+const IconEye=()=>(<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>);
+const IconEyeOff=()=>(<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>);
+const IconRefresh=({size=16})=>(<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>);
 const IconCamera=()=><Icon d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/>;
 const IconClock=()=><Icon d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2"/>;
 const IconPlay=()=><Icon d="M5 3l14 9-14 9V3z"/>;
@@ -367,10 +410,167 @@ const IconMove=()=><Icon d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 
 
 function todayKey() {
   const d = new Date();
-  return `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`;
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
 }
 
-function MemberView({ users, routines, photos, gymInfo }) {
+// ---- Google Sheets -> routine JSON parser (mirrors the validated prototype) ----
+const DRIVE_SECTION_HEADERS = new Set([
+  "MOVILIDAD","ACTIVACION","ACTIVACIÓN","CORE Y ACTIVACION","CORE Y ACTIVACIÓN",
+  "CORE + ACTIVACION","CORE + ACTIVACIÓN","FUERZA ESTRUCTURA","FUERZA ESPECÍFICA",
+  "ACCESORIOS","CIRCUITO FINALIZADOR","CIRCUITO 1","CIRCUITO 2","BLOQUE FINALIZADOR",
+  "ACONDICIONAMIENTO FINAL","CARRERAS POR TIEMPO","CALENTAMIENTO"
+]);
+const DRIVE_SKIP_PREFIXES = ["PAUSA","X2 VUELTAS","X3 VUELTAS","X4 VUELTAS","FORMATO","INTENSIDAD/CARGA","OBSERVACIONES","SIN PAUSA"];
+const DRIVE_WEEKDAYS = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
+
+function driveTitleCase(s){
+  return s.toLowerCase().replace(/(^|\s|-)([a-záéíóúñ])/g,(m,sep,ch)=>sep+ch.toUpperCase());
+}
+function driveRowLabel(cells){
+  for(let i=0;i<Math.min(3,cells.length);i++){ if(cells[i] && cells[i].trim()) return cells[i].trim(); }
+  return "";
+}
+// Turns a Sheets API sheet object ({data:[{rowData}], merges}) into a plain 2D
+// string grid, duplicating each merged range's top-left value across the whole
+// range (so downstream parsing sees the same "repeated" cells a human would).
+function buildGridFromSheet(sheet){
+  const rowData = (sheet.data && sheet.data[0] && sheet.data[0].rowData) || [];
+  const grid = rowData.map(r=>(r.values||[]).map(v=>(v && v.formattedValue) || ""));
+  const nCols = grid.reduce((m,r)=>Math.max(m,r.length),0);
+  grid.forEach(r=>{ while(r.length<nCols) r.push(""); });
+  (sheet.merges||[]).forEach(m=>{
+    const val = (grid[m.startRowIndex] && grid[m.startRowIndex][m.startColumnIndex]) || "";
+    for(let r=m.startRowIndex;r<m.endRowIndex;r++){
+      if(!grid[r]) continue;
+      for(let c=m.startColumnIndex;c<m.endColumnIndex;c++) grid[r][c]=val;
+    }
+  });
+  return grid;
+}
+// rows here are {idx, cells} — idx = absolute row number in the sheet (0-based),
+// kept around so we can later write values back to the exact same cells without
+// touching the sheet's existing structure/formatting/merges at all.
+function driveParseDayBlocks(rows){
+  const blocks=[]; let curBlock=null; let hasWeekCols=false; let groupStart=0;
+  for(const {idx,cells} of rows){
+    const label=driveRowLabel(cells);
+    if(!label) continue;
+    const upper=label.toUpperCase();
+    const rest=cells.slice(3);
+    if(DRIVE_SECTION_HEADERS.has(upper)){
+      curBlock={name:driveTitleCase(label), type:(upper.includes("MOVILIDAD")||upper.includes("CALENTAMIENTO"))?"warmup":"block", exercises:[]};
+      blocks.push(curBlock);
+      hasWeekCols = !!(cells[3] && cells[3].toUpperCase().startsWith("SEMANA 1"));
+      groupStart=0;
+      continue;
+    }
+    if(cells[3] && cells[3].toUpperCase().startsWith("SEMANA 1")){ hasWeekCols=true; continue; }
+    if(upper.startsWith("INTENSIDAD/CARGA")){
+      // Apply this RPE row to every exercise added since the last RPE/group marker
+      if(curBlock){
+        const rpeVals=[0,1,2,3].map(wi=>{
+          const cell=rest[wi*2]||"";
+          const m=cell.match(/(\d+)/);
+          return m?m[1]:"";
+        });
+        for(let k=groupStart;k<curBlock.exercises.length;k++){ curBlock.exercises[k].rpe=rpeVals; curBlock.exercises[k]._rpeRow=idx; }
+        groupStart=curBlock.exercises.length;
+      }
+      continue;
+    }
+    if(DRIVE_SKIP_PREFIXES.some(p=>upper.startsWith(p))){
+      if(curBlock){
+        let tag=null, text="";
+        if(upper.startsWith("PAUSA")){ tag="⏱ Pausa"; text=label; }
+        else if(upper.startsWith("OBSERVACIONES")){ tag="📋 Nota"; text=rest.find(c=>c&&c.trim())||""; }
+        else if(upper.startsWith("FORMATO")){ tag="🔁 Formato"; text=rest.find(c=>c&&c.trim())||""; }
+        if(tag&&text){
+          curBlock.exercises.push({name:tag,sets:1,measType:"reps",reps:text,secs:"",rest:"",notes:"",weeks:[mkWeek(),mkWeek(),mkWeek(),mkWeek()],rpe:["","","",""]});
+          groupStart=curBlock.exercises.length; // notes/pauses close out the current group
+        }
+      }
+      continue;
+    }
+    if(!curBlock){ curBlock={name:"Bloque",type:"block",exercises:[]}; blocks.push(curBlock); }
+    const weeks=[0,1,2,3].map(wi=>{
+      let r=(rest[wi*2]||"").trim();
+      let kg=(hasWeekCols?(rest[wi*2+1]||""):"").trim();
+      if(kg===r) kg="";
+      if(kg==="-") kg="";
+      return {reps:r, kg};
+    });
+    const repsW1=weeks[0].reps;
+    const isSecs=repsW1.includes('"');
+    curBlock.exercises.push({
+      name:driveTitleCase(label), sets:3, measType:isSecs?"secs":"reps",
+      reps:isSecs?"":repsW1, secs:isSecs?repsW1.replace(/"/g,""):"", rest:"60s",
+      notes:"", weeks, rpe:["","","",""], _row:idx, _hasWeekCols:hasWeekCols
+    });
+  }
+  return blocks;
+}
+function driveSplitDays(rows){
+  const days=[]; let cur=null;
+  const dayRe=/^DIA\s+(\d+|UNO|DOS|TRES|CUATRO|CINCO)$/i;
+  for(const r of rows){
+    const label=driveRowLabel(r.cells);
+    if(dayRe.test(label)){ if(cur) days.push(cur); cur=[]; continue; }
+    if(cur) cur.push(r);
+  }
+  if(cur) days.push(cur);
+  return days;
+}
+function parseRoutineFromGrid(name, grid){
+  const indexedRows = grid.map((cells,idx)=>({idx,cells})).filter(o=>o.cells.some(c=>c&&c.trim()));
+  const dayChunks=driveSplitDays(indexedRows);
+  const days=dayChunks.map((dayRows,idx)=>({day:DRIVE_WEEKDAYS[idx]||`Día ${idx+1}`, blocks:driveParseDayBlocks(dayRows)}));
+  return {name:name.trim(), days};
+}
+
+const PSEUDO_TAG_LABELS = {"⏱ Pausa":"PAUSA", "📋 Nota":"OBSERVACIONES", "🔁 Formato":"FORMATO"};
+// Builds an 11-column grid of plain strings from a routine, ready to write via
+// the Sheets API. Mirrors driveParseDayBlocks in reverse (no real cell-merging,
+// just repeats values across the name/week columns like a merge would show).
+function buildGridFromRoutine(routine){
+  const rows=[];
+  const fill=(vals)=>{ const r=Array(11).fill(""); vals.forEach((v,i)=>{ if(i<11) r[i]=v; }); return r; };
+  const rep3=(text)=>[text,text,text];
+  routine.days.forEach((day,di)=>{
+    rows.push(fill([...rep3(`DIA ${di+1}`), "DIA","DIA","DIA","DIA","DIA","DIA","DIA","DIA"]));
+    (day.blocks||[]).forEach(block=>{
+      const hasWeeks = block.type!=="warmup";
+      const headerExtra = hasWeeks ? ["SEMANA 1","kg","SEMANA 2","kg","SEMANA 3","kg","SEMANA 4","KG"] : ["","","","","","","",""];
+      rows.push(fill([...rep3(block.name.toUpperCase()), ...headerExtra]));
+      (block.exercises||[]).forEach(ex=>{
+        if(PSEUDO_TAG_LABELS[ex.name]){
+          const lbl=PSEUDO_TAG_LABELS[ex.name];
+          if(lbl==="PAUSA"){
+            rows.push(fill(rep3(ex.reps||"PAUSA")));
+          } else {
+            rows.push(fill([...rep3(lbl), ex.reps||"", ex.reps||"", ex.reps||"", ex.reps||"", ex.reps||"", ex.reps||"", ex.reps||"", ex.reps||""]));
+          }
+          return;
+        }
+        const weeks = ex.weeks || [mkWeek(),mkWeek(),mkWeek(),mkWeek()];
+        const weekVals=[];
+        weeks.forEach(w=>{ weekVals.push(w.reps||""); weekVals.push(w.kg||""); });
+        rows.push(fill([...rep3(ex.name.toUpperCase()), ...weekVals]));
+        if(ex.rpe && ex.rpe.some(v=>v)){
+          const rpeVals=[];
+          ex.rpe.forEach(v=>{ const t=v?`RPE ${v}`:""; rpeVals.push(t); rpeVals.push(t); });
+          rows.push(fill([...rep3("INTENSIDAD/CARGA (RPE)"), ...rpeVals]));
+        }
+        if(ex.notes){
+          rows.push(fill([...rep3("OBSERVACIONES"), ex.notes,ex.notes,ex.notes,ex.notes,ex.notes,ex.notes,ex.notes,ex.notes]));
+        }
+      });
+    });
+  });
+  return rows;
+}
+
+function MemberView({ users, setUsers, routines, photos, gymInfo }) {
   const [selected, setSelected] = useState(null);
   const [activeDay, setActiveDay] = useState(0);
   const [done, setDone] = useState({});
@@ -381,6 +581,10 @@ function MemberView({ users, routines, photos, gymInfo }) {
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginPass2, setLoginPass2] = useState("");
+  const [showLoginPass, setShowLoginPass] = useState(false);
+  const [showRegPass, setShowRegPass] = useState(false);
+  const [showPwOld, setShowPwOld] = useState(false);
+  const [showPwNew, setShowPwNew] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [entering, setEntering] = useState(false);
   const [deviceUser, setDeviceUser] = useState(null);
@@ -395,11 +599,35 @@ function MemberView({ users, routines, photos, gymInfo }) {
   const [newPass2, setNewPass2] = useState("");
   const [newPass3, setNewPass3] = useState("");
   const [settingsMsg, setSettingsMsg] = useState("");
+  const [showNovedadPopup, setShowNovedadPopup] = useState(false);
+  const [novedadPopupText, setNovedadPopupText] = useState("");
+  const novedadCheckedRef = useRef(false);
   const photoRef = useRef(null);
   const restRef = useRef(null);
 
-  useEffect(()=>{ loadData(KEYS.log,{}).then(setTrainLog); },[]);
+  useEffect(()=>{
+    db.getTrainingLogAll().then(rows=>{
+      if(!rows){ loadData(KEYS.log,{}).then(setTrainLog); return; }
+      const log={};
+      rows.forEach(r=>{ (log[r.user_id]=log[r.user_id]||{})[r.date]=true; });
+      setTrainLog(log);
+    }).catch(()=>{ loadData(KEYS.log,{}).then(setTrainLog); });
+  },[]);
   useEffect(()=>{ loadData(KEYS.pins,{}).then(setPins); },[]);
+
+  // Show a one-time popup when the coach posts a new novedad
+  useEffect(()=>{
+    const novedad = (gymInfo?.novedad||"").trim();
+    if(!novedad || novedadCheckedRef.current) return;
+    novedadCheckedRef.current = true;
+    loadData('novedad_seen','').then(seen=>{
+      if(seen !== novedad){
+        setNovedadPopupText(novedad);
+        setShowNovedadPopup(true);
+      }
+    });
+  },[gymInfo]);
+
   useEffect(()=>{
     // Check if WebAuthn is available
     if(window.PublicKeyCredential){
@@ -472,6 +700,7 @@ function MemberView({ users, routines, photos, gymInfo }) {
         saveData(KEYS.log,entry);
         return entry;
       });
+      db.markTrained(selected.id, today).catch(e=>console.error('No se pudo guardar el entrenamiento en Supabase',e));
     }
   },[done]);
 
@@ -497,11 +726,25 @@ function MemberView({ users, routines, photos, gymInfo }) {
     setRestTimer({secs,remaining:secs,running:true});
   };
 
+  const getCurrentWeek=(u)=>{
+    if(!u?.startDate) return 1;
+    const start=new Date(u.startDate+'T00:00:00');
+    const days=Math.floor((Date.now()-start.getTime())/86400000);
+    return Math.min(4, Math.max(1, Math.floor(days/7)+1));
+  };
+
   const doLogin=(u)=>{
     // Bind this device to the user (first login)
     if(!deviceUser){ setDeviceUser(u); saveData(KEYS.device,u); }
     // Save session timestamp (3 hours)
     saveData('gg_session', {userId: u.id, ts: Date.now()});
+    // First-ever login: this becomes Día/Semana 1 for this member
+    if(!u.startDate){
+      const start=todayKey();
+      db.updateUser(u.id, {start_date:start}).catch(e=>console.error('No se pudo guardar la fecha de inicio',e));
+      u={...u, startDate:start};
+      setUsers(prev=>prev.map(x=>x.id===u.id?{...x,startDate:start}:x));
+    }
     setEntering(true);
     setTimeout(()=>{
       setSelected(u);setLoginFlow(null);setLoginPass("");setLoginPass2("");setLoginUser("");setLoginError("");
@@ -638,12 +881,25 @@ function MemberView({ users, routines, photos, gymInfo }) {
 
   return (
     <div className={`member-view${selected?" member-view--training":""}`}>
+      {showNovedadPopup&&(
+        <div className="rest-overlay" onClick={()=>{}}>
+          <div className="rest-box" style={{width:"90%",maxWidth:340,padding:22,textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:34,marginBottom:8}}>📢</div>
+            <div className="rest-label" style={{margin:"0 0 10px"}}>NOVEDAD</div>
+            <p style={{fontSize:14,color:"var(--text2)",lineHeight:1.5,marginBottom:20,whiteSpace:"pre-wrap"}}>{novedadPopupText}</p>
+            <button className="login-btn" onClick={async()=>{
+              await saveData('novedad_seen', novedadPopupText);
+              setShowNovedadPopup(false);
+            }}>De acuerdo</button>
+          </div>
+        </div>
+      )}
       {entering&&<div className="login-fade-overlay"/>}
 
       <div className={`member-hero${selected?" member-hero--active":""}`}>
         {selected?(
           <>
-            <div style={{position:"relative",display:"inline-block",marginBottom:10,zIndex:2,cursor:"pointer"}} onClick={()=>setShowSettings(true)}>
+            <div className="tap-effect" style={{position:"relative",display:"inline-block",marginBottom:10,zIndex:2,cursor:"pointer"}} onClick={()=>setShowSettings(true)}>
               <div className="hero-active-avatar" style={{cursor:"pointer",margin:0}}>
                 {photos[selected.id]
                   ?<img src={photos[selected.id]} className="hero-active-photo" alt=""/>
@@ -652,7 +908,7 @@ function MemberView({ users, routines, photos, gymInfo }) {
               <div style={{position:"absolute",bottom:-2,right:-6,width:22,height:22,borderRadius:"50%",background:"var(--surface3)",border:"1.5px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:12,zIndex:2}}>⚙</div>
             </div>
             <div className="hero-active-name">{selected.name}</div>
-            <div className="hero-active-tag">{routine?routine.name:"Sin rutina asignada"}</div>
+            <div className="hero-active-tag">{routine?routine.name:"Sin rutina asignada"}{routine?` · Semana ${getCurrentWeek(selected)}`:""}</div>
           </>
         ):(
           <>
@@ -683,18 +939,33 @@ function MemberView({ users, routines, photos, gymInfo }) {
               🔐 Entrar con Face ID / Huella
             </button>
           )}
-          <input className="login-input" type="tel" inputMode="numeric" placeholder="Contraseña (4 dígitos)" maxLength={4}
-            value={loginPass} onChange={e=>{const v=e.target.value.replace(/\D/g,"").slice(0,4);setLoginPass(v);setLoginError("");}}
-            autoFocus onKeyDown={e=>{if(e.key==='Enter'){
-              if(loginPass===pins[loginFlow.user.id]){ doLogin(loginFlow.user); }
-              else setLoginError("Contraseña incorrecta");
-            }}}/>
+          <div className="pw-wrap">
+            <input className="login-input" type={showLoginPass?"text":"password"} inputMode="numeric" placeholder="Contraseña (4 dígitos)" maxLength={4}
+              value={loginPass} onChange={e=>{const v=e.target.value.replace(/\D/g,"").slice(0,4);setLoginPass(v);setLoginError("");}}
+              autoFocus onKeyDown={e=>{if(e.key==='Enter'){
+                if(loginPass===pins[loginFlow.user.id]){ doLogin(loginFlow.user); }
+                else setLoginError("Contraseña incorrecta");
+              }}}/>
+            <button type="button" className="pw-eye" onClick={()=>setShowLoginPass(v=>!v)} tabIndex={-1}>{showLoginPass?<IconEyeOff/>:<IconEye/>}</button>
+          </div>
           {loginError&&<p className="login-error">{loginError}</p>}
           <button className="login-btn" onClick={()=>{
             if(loginPass===pins[loginFlow.user.id]){ doLogin(loginFlow.user); }
             else setLoginError("Contraseña incorrecta");
           }}>Entrar</button>
           <button className="login-cancel" onClick={()=>{setLoginFlow(null);setLoginPass("");setLoginError("");}}>Cancelar</button>
+        </div>
+      )}
+
+      {!selected&&loginFlow&&loginFlow.mode==='unlink'&&(
+        <div className="login-card">
+          <div className="login-avatar"><IconUser/></div>
+          <div className="login-title" style={{alignSelf:"center",textAlign:"center"}}>¿Cambiar de cuenta?</div>
+          <p style={{fontSize:13,color:"var(--text2)",textAlign:"center",lineHeight:1.5,marginBottom:4}}>
+            Este dispositivo va a dejar de estar vinculado a {effectiveBoundUser?.name||"este alumno"}. La próxima persona que inicie sesión acá quedará vinculada en su lugar.
+          </p>
+          <button className="login-btn" onClick={unlinkDevice}>Sí, cambiar cuenta</button>
+          <button className="login-cancel" onClick={()=>setLoginFlow(null)}>Cancelar</button>
         </div>
       )}
 
@@ -707,10 +978,16 @@ function MemberView({ users, routines, photos, gymInfo }) {
               <option value="">Elegí tu nombre</option>
               {unregistered.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
-            <input className="login-input" type="tel" inputMode="numeric" placeholder="Elegí 4 dígitos" maxLength={4}
-              value={loginPass} onChange={e=>{setLoginPass(e.target.value.replace(/\D/g,"").slice(0,4));setLoginError("");}}/>
-            <input className="login-input" type="tel" inputMode="numeric" placeholder="Repetí los 4 dígitos" maxLength={4}
-              value={loginPass2} onChange={e=>{setLoginPass2(e.target.value.replace(/\D/g,"").slice(0,4));setLoginError("");}}/>
+            <div className="pw-wrap">
+              <input className="login-input" type={showRegPass?"text":"password"} inputMode="numeric" placeholder="Elegí 4 dígitos" maxLength={4}
+                value={loginPass} onChange={e=>{setLoginPass(e.target.value.replace(/\D/g,"").slice(0,4));setLoginError("");}}/>
+              <button type="button" className="pw-eye" onClick={()=>setShowRegPass(v=>!v)} tabIndex={-1}>{showRegPass?<IconEyeOff/>:<IconEye/>}</button>
+            </div>
+            <div className="pw-wrap">
+              <input className="login-input" type={showRegPass?"text":"password"} inputMode="numeric" placeholder="Repetí los 4 dígitos" maxLength={4}
+                value={loginPass2} onChange={e=>{setLoginPass2(e.target.value.replace(/\D/g,"").slice(0,4));setLoginError("");}}/>
+              <button type="button" className="pw-eye" onClick={()=>setShowRegPass(v=>!v)} tabIndex={-1}>{showRegPass?<IconEyeOff/>:<IconEye/>}</button>
+            </div>
             {loginError&&<p className="login-error">{loginError}</p>}
             <button className="login-btn" onClick={()=>{
               if(!loginUser){setLoginError("Elegí tu nombre");return;}
@@ -862,7 +1139,10 @@ function MemberView({ users, routines, photos, gymInfo }) {
                       </div>
                       <div className="exercises-list">
                         {block.exercises.map((ex,ei)=>{
-                          const isTime=ex.measType==="time";
+                          const isTime=ex.measType==="time"||ex.measType==="secs";
+                          const wk=getCurrentWeek(selected);
+                          const wd=getWeekData(ex,wk);
+                          const rpe=getWeekRPE(ex,wk);
                           return (
                             <div key={ei} className={`exercise-item ${block.exercises.length>1?"combo-ex":""} ${blockDone?"ex-completed":""}`}>
                               <div className="ex-num-inner" style={{width:32,height:32,borderRadius:"50%",background:"var(--surface3)",border:"2px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,color:"var(--text3)",fontSize:13,fontWeight:700}}>{ei+1}</div>
@@ -871,8 +1151,10 @@ function MemberView({ users, routines, photos, gymInfo }) {
                                 <div className="ex-meta">
                                   <span className="ex-pill">{ex.sets} series</span>
                                   <span className={`ex-pill ${isTime?"time-pill":""}`}>
-                                    {isTime?<><IconClock/> {formatTime(ex.secs)}</>:`${ex.reps} reps`}
+                                    {isTime?<><IconClock/> {formatTime(wd.reps)}</>:`${wd.reps} reps`}
                                   </span>
+                                  {wd.kg&&<span className="ex-pill">🏋 {wd.kg} kg</span>}
+                                  {rpe&&<span className="ex-pill">RPE {rpe}</span>}
                                   {ex.rest&&ex.rest!=="-"&&<span className="ex-pill">⏱ {ex.rest}</span>}
                                 </div>
                                 {ex.notes&&<div className="ex-notes">{ex.notes}</div>}
@@ -917,7 +1199,7 @@ function MemberView({ users, routines, photos, gymInfo }) {
             {settingsView==="main"&&(
               <>
                 <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,paddingBottom:16,borderBottom:"1px solid var(--border)"}}>
-                  <div style={{width:56,height:56,borderRadius:"50%",border:"2px solid var(--gold)",overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--surface2)",color:"var(--gold)",flexShrink:0,cursor:"pointer"}} onClick={()=>photoRef.current.click()}>
+                  <div className="tap-effect" style={{width:56,height:56,borderRadius:"50%",border:"2px solid var(--gold)",overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--surface2)",color:"var(--gold)",flexShrink:0,cursor:"pointer"}} onClick={()=>photoRef.current.click()}>
                     {photos[selected.id]?<img src={photos[selected.id]} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>:<IconUser/>}
                   </div>
                   <div>
@@ -960,9 +1242,29 @@ function MemberView({ users, routines, photos, gymInfo }) {
                   <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                     {(()=>{
                       const log=trainLog[selected.id]||{};
-                      const days=Object.keys(log).filter(k=>log[k]).sort().reverse().slice(0,14);
-                      if(!days.length) return <span style={{fontSize:13,color:"var(--text3)"}}>Sin entrenamientos registrados</span>;
-                      return days.map(d=>(<span key={d} style={{padding:"3px 8px",background:"rgba(62,207,142,0.12)",border:"1px solid rgba(62,207,142,0.3)",borderRadius:6,fontSize:11,color:"var(--green)"}}>{d}</span>));
+                      if(!selected.startDate){
+                        const days=Object.keys(log).filter(k=>log[k]).sort().reverse().slice(0,14);
+                        if(!days.length) return <span style={{fontSize:13,color:"var(--text3)"}}>Sin entrenamientos registrados</span>;
+                        return days.map(d=>(<span key={d} style={{padding:"3px 8px",background:"rgba(62,207,142,0.12)",border:"1px solid rgba(62,207,142,0.3)",borderRadius:6,fontSize:11,color:"var(--green)"}}>{d}</span>));
+                      }
+                      // Show every day since the member's start date, crossing out the ones they missed
+                      const p=n=>String(n).padStart(2,'0');
+                      const start=new Date(selected.startDate+'T00:00:00');
+                      const today=new Date(); today.setHours(0,0,0,0);
+                      const allDays=[];
+                      for(let d=new Date(today); d>=start; d.setDate(d.getDate()-1)){
+                        allDays.push(`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`);
+                      }
+                      const shown=allDays.slice(0,14);
+                      return shown.map(d=>{
+                        const done=!!log[d];
+                        return (
+                          <span key={d} style={done
+                            ?{padding:"3px 8px",background:"rgba(62,207,142,0.12)",border:"1px solid rgba(62,207,142,0.3)",borderRadius:6,fontSize:11,color:"var(--green)"}
+                            :{padding:"3px 8px",background:"rgba(255,255,255,0.03)",border:"1px solid var(--border)",borderRadius:6,fontSize:11,color:"var(--text3)",textDecoration:"line-through"}
+                          }>{d}</span>
+                        );
+                      });
                     })()}
                   </div>
                 </div>
@@ -974,9 +1276,18 @@ function MemberView({ users, routines, photos, gymInfo }) {
             {settingsView==="password"&&(
               <>
                 <div style={{fontSize:13,color:"var(--text3)",marginBottom:14,textAlign:"center"}}>Ingresá tu contraseña actual y la nueva</div>
-                <input className="login-input" type="tel" inputMode="numeric" placeholder="Contraseña anterior (4 dígitos)" maxLength={4} value={newPass} onChange={e=>setNewPass(e.target.value.replace(/\D/g,"").slice(0,4))} style={{marginBottom:10}} autoFocus/>
-                <input className="login-input" type="tel" inputMode="numeric" placeholder="Nueva contraseña (4 dígitos)" maxLength={4} value={newPass2} onChange={e=>setNewPass2(e.target.value.replace(/\D/g,"").slice(0,4))} style={{marginBottom:10}}/>
-                <input className="login-input" type="tel" inputMode="numeric" placeholder="Repetir nueva contraseña" maxLength={4} value={newPass3} onChange={e=>setNewPass3(e.target.value.replace(/\D/g,"").slice(0,4))} style={{marginBottom:12}}/>
+                <div className="pw-wrap">
+                  <input className="login-input" type={showPwOld?"text":"password"} inputMode="numeric" placeholder="Contraseña anterior (4 dígitos)" maxLength={4} value={newPass} onChange={e=>setNewPass(e.target.value.replace(/\D/g,"").slice(0,4))} style={{marginBottom:10}} autoFocus/>
+                  <button type="button" className="pw-eye" onClick={()=>setShowPwOld(v=>!v)} tabIndex={-1}>{showPwOld?<IconEyeOff/>:<IconEye/>}</button>
+                </div>
+                <div className="pw-wrap">
+                  <input className="login-input" type={showPwNew?"text":"password"} inputMode="numeric" placeholder="Nueva contraseña (4 dígitos)" maxLength={4} value={newPass2} onChange={e=>setNewPass2(e.target.value.replace(/\D/g,"").slice(0,4))} style={{marginBottom:10}}/>
+                  <button type="button" className="pw-eye" onClick={()=>setShowPwNew(v=>!v)} tabIndex={-1}>{showPwNew?<IconEyeOff/>:<IconEye/>}</button>
+                </div>
+                <div className="pw-wrap">
+                  <input className="login-input" type={showPwNew?"text":"password"} inputMode="numeric" placeholder="Repetir nueva contraseña" maxLength={4} value={newPass3} onChange={e=>setNewPass3(e.target.value.replace(/\D/g,"").slice(0,4))} style={{marginBottom:12}}/>
+                  <button type="button" className="pw-eye" onClick={()=>setShowPwNew(v=>!v)} tabIndex={-1}>{showPwNew?<IconEyeOff/>:<IconEye/>}</button>
+                </div>
                 {settingsMsg&&<p style={{textAlign:"center",fontSize:13,color:settingsMsg.startsWith("✓")?"var(--gold)":"#ff5c5c",marginBottom:10}}>{settingsMsg}</p>}
                 <button className="login-btn" onClick={()=>{
                   if(newPass!==pins[selected.id]){setSettingsMsg("Contraseña anterior incorrecta");return;}
@@ -1048,7 +1359,7 @@ function PhotoUploadBtn({ userId, currentPhoto, onSave }) {
     setLoading(false); e.target.value="";
   };
   return(
-    <div className="photo-upload-btn" onClick={()=>fileRef.current.click()} title="Cambiar foto">
+    <div className="photo-upload-btn tap-effect" onClick={()=>fileRef.current.click()} title="Cambiar foto">
       {currentPhoto?<img src={currentPhoto} className="uc-photo-img" alt=""/>:<span className="uc-photo-icon"><IconUser/></span>}
       <span className="photo-overlay">{loading?"…":<IconCamera/>}</span>
       <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleFile}/>
@@ -1056,13 +1367,18 @@ function PhotoUploadBtn({ userId, currentPhoto, onSave }) {
   );
 }
 
-function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInfo,setGymInfo }) {
+function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInfo,setGymInfo,
+  showCoachSettings,setShowCoachSettings,coachSettingsMsg,setCoachSettingsMsg,
+  coachNewPin,setCoachNewPin,coachNewPin2,setCoachNewPin2,PIN,setPIN,
+  coachBioAvailable,coachBioRegistered,setCoachBioRegistered,registerCoachBio }) {
   const [tab,setTab]=useState("users");
   const [editRoutine,setEditRoutine]=useState(null);
   const [userSearch,setUserSearch]=useState("");
   const [selectedUser,setSelectedUser]=useState(null);
   const [routineSearch,setRoutineSearch]=useState("");
   const [selectedRoutine,setSelectedRoutine]=useState(null);
+  const [showUserMenu,setShowUserMenu]=useState(false);
+  const [showRoutineMenu,setShowRoutineMenu]=useState(false);
   const [infoNovedad,setInfoNovedad]=useState(gymInfo.novedad||"");
   const [infoHorario,setInfoHorario]=useState(gymInfo.horario||"");
   const [infoSaved,setInfoSaved]=useState(false);
@@ -1073,63 +1389,222 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
   const [validationMsg,setValidationMsg]=useState("");
   const [editDayIdx,setEditDayIdx]=useState(0);
   const validationTimer=useRef(null);
+  const selectedUserCardRef=useRef(null);
+  const selectedRoutineCardRef=useRef(null);
   const [syncing,setSyncing]=useState(false);
   const [syncMsg,setSyncMsg]=useState('');
+  const [coachSettingsView,setCoachSettingsView]=useState('main');
+
+  useEffect(()=>{
+    if(selectedUser && selectedUserCardRef.current){
+      setTimeout(()=>selectedUserCardRef.current?.scrollIntoView({behavior:"smooth",block:"start"}),80);
+    }
+  },[selectedUser]);
+  useEffect(()=>{
+    if(selectedRoutine && selectedRoutineCardRef.current){
+      setTimeout(()=>selectedRoutineCardRef.current?.scrollIntoView({behavior:"smooth",block:"start"}),80);
+    }
+  },[selectedRoutine]);
+
+  const switchTab=(t)=>{
+    setConfirmDelete(null);
+    setShowNewUser(false);
+    setShowUserMenu(false);
+    setShowRoutineMenu(false);
+    setTab(t);
+  };
+
+  // Trigger 3: sync once as soon as the coach opens the panel (PIN or biometric entry)
+  useEffect(()=>{ syncWithDrive(); },[]);
+
+  const lastModifiedRef = useRef({}); // fileId -> last-seen modifiedTime, to detect real changes
+  const checkForDriveChanges = async () => {
+    // Never prompt a login popup from a silent background check — only run
+    // this if we already have a valid cached token from an earlier manual sync/save.
+    if(!driveTokenRef.current.token || Date.now()>=driveTokenRef.current.expiresAt) return;
+    try {
+      const listResp = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q='${DRIVE_FOLDER_ID}'+in+parents+and+mimeType='application/vnd.google-apps.spreadsheet'&fields=files(id,name,modifiedTime)&pageSize=200`,
+        {headers:{Authorization:`Bearer ${driveTokenRef.current.token}`}}
+      );
+      const listData = await listResp.json();
+      const files = (listData.files||[]).filter(f=>!/protocolo/i.test(f.name));
+      const changed = files.some(f=>lastModifiedRef.current[f.id]!==f.modifiedTime);
+      if(changed){
+        files.forEach(f=>{ lastModifiedRef.current[f.id]=f.modifiedTime; });
+        syncWithDrive();
+      }
+    } catch(e){ console.error('Chequeo de cambios en Drive falló silenciosamente', e); }
+  };
+
+  useEffect(()=>{
+    if(tab!=="routines") return;
+    checkForDriveChanges(); // check right away when entering the tab...
+    const interval=setInterval(checkForDriveChanges, 3*60*1000); // ...and every 3 minutes after
+    return ()=>clearInterval(interval);
+  },[tab]);
 
   const syncWithDrive = async () => {
+    if(!GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID.includes('TU_CLIENT_ID')){
+      setSyncMsg('⚠️ Falta configurar el Client ID de Google (ver comentario junto a GOOGLE_CLIENT_ID en el código).');
+      setTimeout(()=>setSyncMsg(''),6000);
+      return;
+    }
     setSyncing(true);
     setSyncMsg('Conectando con Google Drive...');
     try {
-      // Load Google API
-      if(!window.gapi) {
-        await new Promise((res,rej)=>{
-          const s=document.createElement('script');
-          s.src='https://apis.google.com/js/api.js';
-          s.onload=res; s.onerror=rej;
-          document.head.appendChild(s);
-        });
-      }
-      await new Promise(res=>window.gapi.load('client',res));
-      await window.gapi.client.init({
-        apiKey: 'AIzaSyD-placeholder',
-        discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
-      });
+      const token = await getDriveToken();
 
-      // Use Google Identity for auth
-      const token = await new Promise((res,rej)=>{
-        const client = window.google.accounts.oauth2.initTokenClient({
-          client_id: 'YOUR_GOOGLE_CLIENT_ID',
-          scope: 'https://www.googleapis.com/auth/drive.readonly',
-          callback: (t) => t.error ? rej(t.error) : res(t.access_token),
-        });
-        client.requestAccessToken();
-      });
-
-      setSyncMsg('Leyendo planillas...');
-      const resp = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q='${DRIVE_FOLDER_ID}'+in+parents&fields=files(id,name)&pageSize=100`,
+      setSyncMsg('Buscando planillas...');
+      const listResp = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q='${DRIVE_FOLDER_ID}'+in+parents+and+mimeType='application/vnd.google-apps.spreadsheet'&fields=files(id,name,modifiedTime)&pageSize=200`,
         {headers:{Authorization:`Bearer ${token}`}}
       );
-      const {files} = await resp.json();
-      setSyncMsg(`Encontradas ${files.length} planillas. Procesando...`);
+      const listData = await listResp.json();
+      const files = (listData.files||[]).filter(f=>!/protocolo/i.test(f.name));
+      files.forEach(f=>{ lastModifiedRef.current[f.id]=f.modifiedTime; });
+      if(!files.length){ setSyncMsg('No se encontraron planillas en la carpeta.'); setSyncing(false); return; }
 
-      // Read each file and parse
-      let updated = 0;
-      for(const file of files) {
-        const contentResp = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/csv`,
-          {headers:{Authorization:`Bearer ${token}`}}
-        );
-        if(contentResp.ok) updated++;
+      let created=0, updatedCount=0; const failed=[];
+      for(let i=0;i<files.length;i++){
+        const file=files[i];
+        setSyncMsg(`Procesando ${i+1}/${files.length}: ${file.name}...`);
+        try{
+          const sheetResp = await fetch(
+            `https://sheets.googleapis.com/v4/spreadsheets/${file.id}?includeGridData=true&fields=sheets(data(rowData(values(formattedValue))),merges)`,
+            {headers:{Authorization:`Bearer ${token}`}}
+          );
+          const sheetJson = await sheetResp.json();
+          const sheet = sheetJson.sheets && sheetJson.sheets[0];
+          if(!sheet){ failed.push(file.name); continue; }
+          const grid = buildGridFromSheet(sheet);
+          const routine = parseRoutineFromGrid(file.name, grid);
+          if(!routine.days.length){ failed.push(`${file.name} (sin días detectados)`); continue; }
+
+          const existing = routines.find(r=>r.name.trim().toLowerCase()===routine.name.toLowerCase());
+          if(existing){
+            await db.updateRoutine(existing.id, {name:routine.name, days:routine.days, drive_file_id:file.id});
+            setRoutines(rs=>rs.map(r=>r.id===existing.id?{...r,name:routine.name,days:routine.days,drive_file_id:file.id}:r));
+            updatedCount++;
+          } else {
+            const createdRows = await db.createRoutine({name:routine.name, days:routine.days, drive_file_id:file.id});
+            if(createdRows?.[0]) setRoutines(rs=>[...rs, {...routine, id:createdRows[0].id, drive_file_id:file.id}]);
+            created++;
+          }
+        } catch(e){
+          console.error(e);
+          failed.push(file.name);
+        }
       }
-      setSyncMsg(`✓ ${updated} rutinas sincronizadas`);
-      setTimeout(()=>setSyncMsg(''),4000);
+      setSyncMsg(`✓ Listo: ${created} nuevas, ${updatedCount} actualizadas${failed.length?`, ${failed.length} con error (ver consola)`:''}`);
+      setTimeout(()=>setSyncMsg(''),8000);
     } catch(e) {
-      setSyncMsg('Error al sincronizar. Verificá los permisos de Drive.');
-      setTimeout(()=>setSyncMsg(''),4000);
       console.error(e);
+      setSyncMsg('Error al sincronizar. Verificá el Client ID y los permisos de Drive.');
+      setTimeout(()=>setSyncMsg(''),5000);
     }
     setSyncing(false);
+  };
+
+  const [pushingDrive,setPushingDrive]=useState(false);
+  const driveTokenRef=useRef({token:null, expiresAt:0});
+  const getDriveToken=async()=>{
+    if(driveTokenRef.current.token && Date.now()<driveTokenRef.current.expiresAt) return driveTokenRef.current.token;
+    if(!window.google || !window.google.accounts){
+      await new Promise((res,rej)=>{
+        const s=document.createElement('script');
+        s.src='https://accounts.google.com/gsi/client';
+        s.onload=res; s.onerror=rej;
+        document.head.appendChild(s);
+      });
+    }
+    const token = await new Promise((res,rej)=>{
+      const client = window.google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets',
+        callback: (t) => t.error ? rej(t.error) : res(t.access_token),
+      });
+      client.requestAccessToken();
+    });
+    driveTokenRef.current = {token, expiresAt: Date.now()+55*60*1000}; // Google tokens last ~1h; refresh a bit early
+    return token;
+  };
+  const pushRoutineToDrive = async (routine) => {
+    setPushingDrive(true);
+    setSyncMsg('Sincronizando con Drive...');
+    try {
+      const token = await getDriveToken();
+
+      let fileId = routine.drive_file_id;
+      let skippedNew = 0;
+
+      if(!fileId){
+        // No Drive file yet for this routine (created directly in the app) -> create
+        // a brand-new one. There's no existing layout to preserve here, so this is
+        // the one case where we write a plain (unmerged) grid.
+        const createResp = await fetch('https://www.googleapis.com/drive/v3/files', {
+          method:'POST',
+          headers:{Authorization:`Bearer ${token}`, 'Content-Type':'application/json'},
+          body: JSON.stringify({ name: routine.name, mimeType:'application/vnd.google-apps.spreadsheet', parents:[DRIVE_FOLDER_ID] })
+        });
+        const created = await createResp.json();
+        fileId = created.id;
+        if(!fileId) throw new Error('No se pudo crear la planilla en Drive');
+        await db.updateRoutine(routine.id, {drive_file_id: fileId});
+        setRoutines(rs=>rs.map(r=>r.id===routine.id?{...r,drive_file_id:fileId}:r));
+
+        const grid = buildGridFromRoutine(routine);
+        await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values/A1?valueInputOption=RAW`, {
+          method:'PUT',
+          headers:{Authorization:`Bearer ${token}`, 'Content-Type':'application/json'},
+          body: JSON.stringify({ range:'A1', majorDimension:'ROWS', values: grid })
+        });
+      } else {
+        // Existing Drive file: update ONLY the specific cells that hold reps/kg/RPE
+        // for exercises we know the exact row of (from the last read). Everything
+        // else — headers, merges, colors, notes — is left completely untouched.
+        const metaResp = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${fileId}?fields=sheets.properties.title`, {
+          headers:{Authorization:`Bearer ${token}`}
+        });
+        const meta = await metaResp.json();
+        const sheetTitle = meta?.sheets?.[0]?.properties?.title || null;
+        const rangePrefix = sheetTitle ? `'${sheetTitle.replace(/'/g,"''")}'!` : '';
+
+        const data=[];
+        routine.days.forEach(day=>(day.blocks||[]).forEach(block=>(block.exercises||[]).forEach(ex=>{
+          if(PSEUDO_TAG_LABELS[ex.name]) return; // notes/pausas/formato: left as-is on purpose
+          if(ex._row==null){ skippedNew++; return; }
+          const weeks = ex.weeks || [mkWeek(),mkWeek(),mkWeek(),mkWeek()];
+          let rowVals;
+          if(ex._hasWeekCols){
+            rowVals=[]; weeks.forEach(w=>{ rowVals.push(w.reps||""); rowVals.push(w.kg||""); });
+          } else {
+            const v = weeks[0].reps || "";
+            rowVals = Array(8).fill(v);
+          }
+          data.push({ range:`${rangePrefix}D${ex._row+1}:K${ex._row+1}`, values:[rowVals] });
+          if(ex._rpeRow!=null && ex.rpe && ex.rpe.some(v=>v)){
+            const rpeVals=[]; ex.rpe.forEach(v=>{ const t=v?`RPE ${v}`:""; rpeVals.push(t); rpeVals.push(t); });
+            data.push({ range:`${rangePrefix}D${ex._rpeRow+1}:K${ex._rpeRow+1}`, values:[rpeVals] });
+          }
+        })));
+
+        if(data.length){
+          await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values:batchUpdate`, {
+            method:'POST',
+            headers:{Authorization:`Bearer ${token}`, 'Content-Type':'application/json'},
+            body: JSON.stringify({ valueInputOption:'RAW', data })
+          });
+        }
+      }
+      setSyncMsg(`✓ Sincronizado con Drive${skippedNew?` (${skippedNew} ejercicio(s) nuevo(s) sin sincronizar — agregalos a mano en Drive)`:''}`);
+      setTimeout(()=>setSyncMsg(''),6000);
+    } catch(e) {
+      console.error(e);
+      setSyncMsg('⚠️ No se pudo sincronizar con Drive (se guardó igual en la app).');
+      setTimeout(()=>setSyncMsg(''),6000);
+    }
+    setPushingDrive(false);
   };
 
   const showValidation=(msg)=>{ setValidationMsg(msg); clearTimeout(validationTimer.current); validationTimer.current=setTimeout(()=>setValidationMsg(""),3000); };
@@ -1154,8 +1629,15 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
     if(editRoutine.id){
       db.updateRoutine(editRoutine.id,{name:editRoutine.name,days:editRoutine.days});
       setRoutines(routines.map(x=>x.id===editRoutine.id?editRoutine:x));
+      pushRoutineToDrive(editRoutine); // fire-and-forget: keeps Drive in sync automatically
     } else {
-      db.createRoutine({name:editRoutine.name,days:editRoutine.days}).then(r=>{ if(r?.[0]) setRoutines([...routines,{...editRoutine,id:r[0].id}]); });
+      db.createRoutine({name:editRoutine.name,days:editRoutine.days}).then(r=>{
+        if(r?.[0]){
+          const saved={...editRoutine,id:r[0].id};
+          setRoutines([...routines,saved]);
+          pushRoutineToDrive(saved);
+        }
+      });
     }
     setEditRoutine(null);
   };
@@ -1203,65 +1685,101 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
     else updateExercise(di,bi,ei,"reps",s);
   };
   const handleSecsChange=(di,bi,ei,val)=>updateExercise(di,bi,ei,"secs",val.replace(/\D/g,""));
+  const updateExerciseWeek=(di,bi,ei,wi,field,v)=>{
+    const days=editRoutine.days.map((d,i)=>i===di?{...d,blocks:d.blocks.map((b,j)=>j===bi?{...b,exercises:b.exercises.map((ex,k)=>{
+      if(k!==ei) return ex;
+      const weeks=(ex.weeks||[mkWeek(),mkWeek(),mkWeek(),mkWeek()]).map((w,idx)=>idx===wi?{...w,[field]:v}:w);
+      return {...ex,weeks};
+    })}:b)}:d);
+    setEditRoutine({...editRoutine,days});
+  };
+  const updateExerciseRPE=(di,bi,ei,wi,v)=>{
+    const days=editRoutine.days.map((d,i)=>i===di?{...d,blocks:d.blocks.map((b,j)=>j===bi?{...b,exercises:b.exercises.map((ex,k)=>{
+      if(k!==ei) return ex;
+      const rpe=(ex.rpe||["","","",""]).map((r,idx)=>idx===wi?v:r);
+      return {...ex,rpe};
+    })}:b)}:d);
+    setEditRoutine({...editRoutine,days});
+  };
+  const [expandedWeeks,setExpandedWeeks]=useState({});
+  const toggleWeeks=(key)=>setExpandedWeeks(prev=>({...prev,[key]:!prev[key]}));
 
   return (
     <div className="coach-view">
       <div className="coach-header">
         <div className="coach-brand" style={{justifyContent:"space-between"}}>
           <div style={{display:"flex",alignItems:"center",gap:8}}><span className="brand-dot"/><span>Panel Profe</span></div>
-          <button style={{background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:18,padding:0}} onClick={()=>{setShowCoachSettings(true);setCoachSettingsMsg("");setCoachNewPin("");setCoachNewPin2("");}}>⚙</button>
+          <button style={{background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:18,padding:0}} onClick={()=>{setShowCoachSettings(true);setCoachSettingsView('main');setCoachSettingsMsg("");setCoachNewPin("");setCoachNewPin2("");}}>⚙</button>
         </div>
         <div className="coach-tabs">
-          <button className={`ctab ${tab==="users"?"active":""}`} onClick={()=>setTab("users")}><IconUser/> Alumnos</button>
-          <button className={`ctab ${tab==="routines"?"active":""}`} onClick={()=>setTab("routines")}><IconDumbbell/> Rutinas</button>
-          <button className={`ctab ${tab==="info"?"active":""}`} onClick={()=>setTab("info")}>📢 Info</button>
+          <button className={`ctab ${tab==="users"?"active":""}`} onClick={()=>switchTab("users")}><IconUser/> Alumnos</button>
+          <button className={`ctab ${tab==="routines"?"active":""}`} onClick={()=>switchTab("routines")}><IconDumbbell/> Rutinas</button>
+          <button className={`ctab ${tab==="info"?"active":""}`} onClick={()=>switchTab("info")}>📢 Info</button>
         </div>
       </div>
 
       {showCoachSettings&&(
-        <div className="rest-overlay" onClick={()=>setShowCoachSettings(false)}>
+        <div className="rest-overlay" onClick={()=>{setShowCoachSettings(false);setCoachSettingsView('main');setCoachNewPin("");setCoachNewPin2("");setCoachSettingsMsg("");}}>
           <div className="rest-box" style={{width:"90%",maxWidth:320,padding:20}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-              <div className="rest-label" style={{margin:0}}>AJUSTES PROFE</div>
-              <button style={{background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:20}} onClick={()=>setShowCoachSettings(false)}>✕</button>
+              {coachSettingsView==="password"?(
+                <button style={{background:"none",border:"none",color:"var(--gold)",cursor:"pointer",fontSize:13,fontWeight:600,padding:0,letterSpacing:.5}} onClick={()=>{setCoachSettingsView("main");setCoachNewPin("");setCoachNewPin2("");setCoachSettingsMsg("");}}>← Volver</button>
+              ):(
+                <div className="rest-label" style={{margin:0}}>AJUSTES PROFE</div>
+              )}
+              <button style={{background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:20}} onClick={()=>{setShowCoachSettings(false);setCoachSettingsView('main');setCoachNewPin("");setCoachNewPin2("");setCoachSettingsMsg("");}}>✕</button>
             </div>
 
-            {/* Cambiar PIN */}
-            <div style={{marginBottom:16,paddingBottom:16,borderBottom:"1px solid var(--border)"}}>
-              <div style={{fontSize:11,color:"var(--text3)",letterSpacing:1,textTransform:"uppercase",fontWeight:600,marginBottom:8}}>Cambiar PIN de acceso</div>
-              <input className="login-input" type="tel" inputMode="numeric" placeholder="PIN actual (4 dígitos)" maxLength={4}
-                value={coachNewPin} onChange={e=>setCoachNewPin(e.target.value.replace(/\D/g,"").slice(0,4))} style={{marginBottom:8}}/>
-              <input className="login-input" type="tel" inputMode="numeric" placeholder="Nuevo PIN (4 dígitos)" maxLength={4}
-                value={coachNewPin2} onChange={e=>setCoachNewPin2(e.target.value.replace(/\D/g,"").slice(0,4))} style={{marginBottom:10}}/>
-              <button className="login-btn" onClick={async()=>{
-                if(coachNewPin!==PIN){setCoachSettingsMsg("PIN actual incorrecto");return;}
-                if(coachNewPin2.length!==4){setCoachSettingsMsg("El nuevo PIN debe tener 4 dígitos");return;}
-                await saveData('coach_pin',coachNewPin2);
-                setPIN(coachNewPin2);
-                setCoachNewPin("");setCoachNewPin2("");
-                setCoachSettingsMsg("✓ PIN actualizado");
-              }}>Cambiar PIN</button>
-            </div>
+            {/* VISTA PRINCIPAL */}
+            {coachSettingsView==="main"&&(
+              <>
+                <button style={{width:"100%",padding:"12px 16px",background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--text)",borderRadius:10,cursor:"pointer",fontSize:14,fontWeight:600,textAlign:"left",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}} onClick={()=>{setCoachSettingsView("password");setCoachSettingsMsg("");}}>
+                  <span>🔑 Cambiar PIN</span><span style={{color:"var(--text3)"}}>›</span>
+                </button>
 
-            {/* Biometría */}
-            {coachBioAvailable&&(
-              <div style={{marginBottom:16}}>
-                <div style={{fontSize:11,color:"var(--text3)",letterSpacing:1,textTransform:"uppercase",fontWeight:600,marginBottom:8}}>Biometría</div>
-                {coachBioRegistered?(
-                  <button style={{width:"100%",padding:"12px",background:"rgba(224,62,62,0.1)",border:"1px solid var(--red)",color:"var(--red)",borderRadius:8,cursor:"pointer",fontSize:13}} onClick={async()=>{
-                    await saveData('coach_bio_registered',false);
-                    setCoachBioRegistered(false);
-                    setCoachSettingsMsg("Biometría desactivada");
-                  }}>Desactivar Face ID / Huella</button>
-                ):(
-                  <button style={{width:"100%",padding:"12px",background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--text2)",borderRadius:8,cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:8}} onClick={registerCoachBio}>
-                    🔐 Activar Face ID / Huella
+                {coachBioAvailable&&(
+                  <button style={{width:"100%",padding:"12px 16px",background:"var(--surface2)",border:"1px solid var(--border)",color:coachBioRegistered?"var(--green)":"var(--text)",borderRadius:10,cursor:"pointer",fontSize:14,fontWeight:600,textAlign:"left",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}} onClick={async()=>{
+                    if(coachBioRegistered){
+                      await saveData('coach_bio_registered',false);
+                      setCoachBioRegistered(false);
+                      setCoachSettingsMsg("Biometría desactivada");
+                    } else {
+                      registerCoachBio();
+                    }
+                  }}>
+                    <span>{coachBioRegistered?"✓ Face ID / Huella activo":"🔐 Activar Face ID / Huella"}</span><span style={{color:"var(--text3)"}}>›</span>
                   </button>
                 )}
-              </div>
+                {!coachBioAvailable&&(
+                  <div style={{padding:"10px 12px",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:10,fontSize:13,color:"var(--text3)",marginBottom:10}}>
+                    ⚠️ Biometría no disponible en este dispositivo o navegador
+                  </div>
+                )}
+
+                {coachSettingsMsg&&<p style={{textAlign:"center",fontSize:13,color:coachSettingsMsg.startsWith("✓")?"var(--gold)":"#ff5c5c",marginTop:8}}>{coachSettingsMsg}</p>}
+              </>
             )}
 
-            {coachSettingsMsg&&<p style={{textAlign:"center",fontSize:13,color:coachSettingsMsg.startsWith("✓")?"var(--gold)":"#ff5c5c",marginTop:8}}>{coachSettingsMsg}</p>}
+            {/* VISTA CAMBIAR PIN */}
+            {coachSettingsView==="password"&&(
+              <>
+                <div style={{fontSize:13,color:"var(--text3)",marginBottom:14,textAlign:"center"}}>Ingresá el PIN actual y el nuevo</div>
+                <input className="login-input" type="tel" inputMode="numeric" placeholder="PIN actual (4 dígitos)" maxLength={4} autoFocus
+                  value={coachNewPin} onChange={e=>setCoachNewPin(e.target.value.replace(/\D/g,"").slice(0,4))} style={{marginBottom:10}}/>
+                <input className="login-input" type="tel" inputMode="numeric" placeholder="Nuevo PIN (4 dígitos)" maxLength={4}
+                  value={coachNewPin2} onChange={e=>setCoachNewPin2(e.target.value.replace(/\D/g,"").slice(0,4))} style={{marginBottom:12}}/>
+                {coachSettingsMsg&&<p style={{textAlign:"center",fontSize:13,color:coachSettingsMsg.startsWith("✓")?"var(--gold)":"#ff5c5c",marginBottom:10}}>{coachSettingsMsg}</p>}
+                <button className="login-btn" onClick={async()=>{
+                  if(coachNewPin!==PIN){setCoachSettingsMsg("PIN actual incorrecto");return;}
+                  if(coachNewPin2.length!==4){setCoachSettingsMsg("El nuevo PIN debe tener 4 dígitos");return;}
+                  await saveData('coach_pin',coachNewPin2);
+                  setPIN(coachNewPin2);
+                  setCoachNewPin("");setCoachNewPin2("");
+                  setCoachSettingsMsg("✓ PIN actualizado");
+                  setTimeout(()=>setCoachSettingsView("main"),1200);
+                }}>Guardar PIN</button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1278,7 +1796,7 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
         </div>
       )}
 
-      {editRoutine&&(
+      {tab==="routines"&&editRoutine&&(
         <div className="routine-editor">
           <div className="re-header">
             <h2>{editRoutine.id?"Editar rutina":"Nueva rutina"}</h2>
@@ -1341,6 +1859,31 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
                             </select></label>
                           </div>
                           <input className="re-field notes" placeholder="Notas (opcional)" value={ex.notes} onChange={e=>updateExercise(di,bi,ei,"notes",e.target.value)}/>
+                          {(()=>{
+                            const wKey=`${di}-${bi}-${ei}`;
+                            const weeks=ex.weeks||[mkWeek(),mkWeek(),mkWeek(),mkWeek()];
+                            const rpe=ex.rpe||["","","",""];
+                            const isSecsEx=ex.measType!=="reps";
+                            return (
+                              <div style={{marginTop:8}}>
+                                <button type="button" onClick={()=>toggleWeeks(wKey)} style={{background:"none",border:"none",color:"var(--gold)",fontSize:12,fontWeight:600,cursor:"pointer",padding:0,display:"flex",alignItems:"center",gap:4}}>
+                                  📅 Progresión semanal {expandedWeeks[wKey]?"▲":"▼"}
+                                </button>
+                                {expandedWeeks[wKey]&&(
+                                  <div style={{marginTop:8,display:"flex",flexDirection:"column",gap:6,background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:10}}>
+                                    {[0,1,2,3].map(wi=>(
+                                      <div key={wi} style={{display:"grid",gridTemplateColumns:"64px 1fr 1fr 70px",gap:6,alignItems:"center"}}>
+                                        <span style={{fontSize:11,color:"var(--text3)",fontWeight:700,textTransform:"uppercase"}}>Sem {wi+1}</span>
+                                        <input className="re-field" placeholder={isSecsEx?"Segundos":"Reps"} value={weeks[wi].reps} onChange={e=>updateExerciseWeek(di,bi,ei,wi,"reps",e.target.value)} style={{margin:0}}/>
+                                        <input className="re-field" placeholder="Kg" value={weeks[wi].kg} onChange={e=>updateExerciseWeek(di,bi,ei,wi,"kg",e.target.value)} style={{margin:0}}/>
+                                        <input className="re-field" placeholder="RPE" value={rpe[wi]} onChange={e=>updateExerciseRPE(di,bi,ei,wi,e.target.value)} style={{margin:0}}/>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       ))}
                       {block.exercises.length<8&&(<button className="btn-add-ex" onClick={()=>addExercise(di,bi)}><IconPlus/> Agregar ejercicio al bloque {block.exercises.length>0?`(${block.exercises.length}/8)`:""}</button>)}
@@ -1360,7 +1903,7 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
         </div>
       )}
 
-      {tab==="users"&&!editRoutine&&(
+      {tab==="users"&&(
         <div className="tab-content">
           <div className="tab-topbar">
             <h2>Alumnos <span className="count-badge">{users.length}</span></h2>
@@ -1387,17 +1930,19 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
               className="nu-input"
               placeholder="Buscar alumno..."
               value={userSearch}
-              onChange={e=>{setUserSearch(e.target.value);setSelectedUser(null);}}
+              onChange={e=>{setUserSearch(e.target.value);setSelectedUser(null);setShowUserMenu(true);}}
+              onFocus={e=>{ setShowUserMenu(true); const el=e.target; setTimeout(()=>el.scrollIntoView({behavior:"smooth",block:"center"}),300); }}
+              onBlur={()=>setTimeout(()=>setShowUserMenu(false),150)}
               style={{width:"100%",boxSizing:"border-box"}}
             />
-            {userSearch&&(
+            {showUserMenu&&(
               <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:50,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:10,marginTop:4,maxHeight:220,overflowY:"auto",boxShadow:"0 8px 24px rgba(0,0,0,.4)"}}>
                 {users.filter(u=>u.name.toLowerCase().includes(userSearch.toLowerCase())).length===0&&(
                   <div style={{padding:"12px 16px",color:"var(--text3)",fontSize:13}}>Sin resultados</div>
                 )}
                 {users.filter(u=>u.name.toLowerCase().includes(userSearch.toLowerCase())).map(u=>(
                   <button key={u.id} style={{width:"100%",background:"none",border:"none",borderBottom:"1px solid var(--border)",padding:"11px 16px",textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",gap:10,color:"var(--text)"}}
-                    onClick={()=>{setSelectedUser(u);setUserSearch('');}}>
+                    onClick={()=>{setSelectedUser(u);setUserSearch('');setShowUserMenu(false);}}>
                     <div style={{width:32,height:32,borderRadius:"50%",overflow:"hidden",flexShrink:0,background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text3)"}}>
                       {photos[u.id]?<img src={photos[u.id]} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>:<IconUser/>}
                     </div>
@@ -1415,7 +1960,7 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
           {selectedUser&&(()=>{
             const u=users.find(x=>x.id===selectedUser.id)||selectedUser;
             return(
-              <div className={`user-card ${u.active?"active":"inactive"}`}>
+              <div ref={selectedUserCardRef} className={`user-card ${u.active?"active":"inactive"}`}>
                 <div className="uc-top">
                   <PhotoUploadBtn userId={u.id} currentPhoto={photos[u.id]} onSave={savePhoto}/>
                   <div className="uc-info">
@@ -1457,8 +2002,14 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
         <div className="tab-content">
           <div className="tab-topbar">
             <h2>Rutinas <span className="count-badge">{routines.length}</span></h2>
-            <button className="btn-primary" onClick={startNewRoutine}><IconPlus/> Nueva</button>
+            <div style={{display:"flex",gap:8}}>
+              <button className={`btn-sync${syncing?" spinning":""}`} disabled={syncing} onClick={syncWithDrive}>
+                <span className="sync-icon"><IconRefresh/></span> {syncing?"Sincronizando...":"Actualizar desde Drive"}
+              </button>
+              <button className="btn-primary" onClick={startNewRoutine}><IconPlus/> Nueva</button>
+            </div>
           </div>
+          {syncMsg&&<div style={{fontSize:13,color:"var(--gold)",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 12px",marginBottom:12}}>{syncMsg}</div>}
 
           {/* Search bar */}
           <div style={{position:"relative",marginBottom:12}}>
@@ -1466,17 +2017,19 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
               className="nu-input"
               placeholder="Buscar rutina..."
               value={routineSearch}
-              onChange={e=>{setRoutineSearch(e.target.value);setSelectedRoutine(null);}}
+              onChange={e=>{setRoutineSearch(e.target.value);setSelectedRoutine(null);setShowRoutineMenu(true);}}
+              onFocus={e=>{ setShowRoutineMenu(true); const el=e.target; setTimeout(()=>el.scrollIntoView({behavior:"smooth",block:"center"}),300); }}
+              onBlur={()=>setTimeout(()=>setShowRoutineMenu(false),150)}
               style={{width:"100%",boxSizing:"border-box"}}
             />
-            {routineSearch&&(
+            {showRoutineMenu&&(
               <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:50,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:10,marginTop:4,maxHeight:220,overflowY:"auto",boxShadow:"0 8px 24px rgba(0,0,0,.4)"}}>
                 {routines.filter(r=>r.name.toLowerCase().includes(routineSearch.toLowerCase())).length===0&&(
                   <div style={{padding:"12px 16px",color:"var(--text3)",fontSize:13}}>Sin resultados</div>
                 )}
                 {routines.filter(r=>r.name.toLowerCase().includes(routineSearch.toLowerCase())).map(r=>(
                   <button key={r.id} style={{width:"100%",background:"none",border:"none",borderBottom:"1px solid var(--border)",padding:"11px 16px",textAlign:"left",cursor:"pointer",color:"var(--text)"}}
-                    onClick={()=>{setSelectedRoutine(r);setRoutineSearch('');}}>
+                    onClick={()=>{setSelectedRoutine(r);setRoutineSearch('');setShowRoutineMenu(false);}}>
                     <div style={{fontSize:14,fontWeight:600}}>{r.name}</div>
                     <div style={{fontSize:11,color:"var(--text3)",marginTop:2}}>{r.days.length} días · {users.filter(u=>u.routineId===r.id).length} alumnos</div>
                   </button>
@@ -1492,7 +2045,7 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
             const totalEx=r.days.reduce((a,d)=>a+d.blocks.reduce((b,bl)=>b+bl.exercises.length,0),0);
             const totalBlocks=r.days.reduce((a,d)=>a+d.blocks.length,0);
             return(
-              <div className="routine-row" style={{flexDirection:"column",alignItems:"stretch",gap:10}}>
+              <div ref={selectedRoutineCardRef} className="routine-row" style={{flexDirection:"column",alignItems:"stretch",gap:10}}>
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
                   <div className="rr-info" style={{flex:1}}>
                     <div className="rr-name">{r.name}</div>
@@ -1527,7 +2080,7 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
         </div>
       )}
 
-      {tab==="info"&&!editRoutine&&(
+      {tab==="info"&&(
         <div className="tab-content">
           <div className="tab-topbar"><h2>Info para alumnos</h2></div>
           <div style={{padding:"0 4px"}}>
@@ -1602,6 +2155,9 @@ function AppInner() {
   const [coachNewPin, setCoachNewPin] = useState("");
   const [coachNewPin2, setCoachNewPin2] = useState("");
   const [coachSettingsMsg, setCoachSettingsMsg] = useState("");
+  const [showCoachBioPrompt, setShowCoachBioPrompt] = useState(false);
+  const [coachSessionTs, setCoachSessionTs] = useState(null);
+  const COACH_SESSION_MS = 6*60*60*1000;
 
   useEffect(()=>{
     // Load coach PIN and biometric state
@@ -1611,23 +2167,42 @@ function AppInner() {
       window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
         .then(ok=>setCoachBioAvailable(ok)).catch(()=>{});
     }
+    // Restore coach session if < 6 hours old
+    loadData('coach_session', null).then(session=>{
+      if(session && Date.now()-session.ts < COACH_SESSION_MS){
+        setMode("coach");
+        setCoachSessionTs(session.ts);
+      } else if(session){
+        saveData('coach_session', null);
+      }
+    });
   },[]);
+
+  const startCoachSession=()=>{ const ts=Date.now(); saveData('coach_session', {ts}); setCoachSessionTs(ts); };
+  const coachSessionValid=()=> coachSessionTs && (Date.now()-coachSessionTs < COACH_SESSION_MS);
 
   useEffect(()=>{
     (async()=>{
-      // Load from Supabase
-      const [supaUsers, supaRoutines, supaGymInfo] = await Promise.all([
-        db.getUsers(),
-        db.getRoutines(),
-        db.getGymInfo(),
-      ]);
-      setUsers(supaUsers?.length ? supaUsers.map(u=>({
-        id: u.id, name: u.name, active: u.active, cuota: u.cuota,
-        routineId: u.routine_id, photo: u.photo
-      })) : defaultUsers);
-      setRoutines(supaRoutines?.length ? supaRoutines : defaultRoutines);
-      setGymInfo(supaGymInfo || {});
-      setPhotos(await loadData(KEYS.photos,{}));
+      const timeout = (ms)=>new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),ms));
+      try {
+        // Load from Supabase (bounded to 8s so the splash never hangs forever)
+        const [supaUsers, supaRoutines, supaGymInfo] = await Promise.race([
+          Promise.all([ db.getUsers(), db.getRoutines(), db.getGymInfo() ]),
+          timeout(8000)
+        ]);
+        setUsers(supaUsers?.length ? supaUsers.map(u=>({
+          id: u.id, name: u.name, active: u.active, cuota: u.cuota,
+          routineId: u.routine_id, photo: u.photo, startDate: u.start_date
+        })) : defaultUsers);
+        setRoutines(supaRoutines?.length ? supaRoutines : defaultRoutines);
+        setGymInfo(supaGymInfo || {});
+      } catch(e) {
+        console.error("No se pudo conectar con Supabase, usando datos por defecto.", e);
+        setUsers(defaultUsers);
+        setRoutines(defaultRoutines);
+        setGymInfo({});
+      }
+      try { setPhotos(await loadData(KEYS.photos,{})); } catch(e) { setPhotos({}); }
       setLoaded(true);
     })();
   },[]);
@@ -1640,7 +2215,11 @@ function AppInner() {
   },[loaded]);
 
   const enterCoach=()=>{
-    if(coachPin===PIN){setMode("coach");setShowPinModal(false);setCoachPin("");setPinError(false);}
+    if(coachPin===PIN){
+      setMode("coach");setShowPinModal(false);setCoachPin("");setPinError(false);
+      startCoachSession();
+      if(coachBioAvailable && !coachBioRegistered) setShowCoachBioPrompt(true);
+    }
     else setPinError(true);
   };
 
@@ -1657,6 +2236,7 @@ function AppInner() {
         }
       });
       setMode("coach"); setShowPinModal(false); setCoachPin(""); setPinError(false);
+      startCoachSession();
     } catch(e) { setPinError(true); }
   };
 
@@ -1678,7 +2258,8 @@ function AppInner() {
       await saveData('coach_bio_registered', true);
       setCoachBioRegistered(true);
       setCoachSettingsMsg("✓ Biometría activada");
-    } catch(e) { setCoachSettingsMsg("Error al registrar biometría"); }
+      setShowCoachBioPrompt(false);
+    } catch(e) { setCoachSettingsMsg("Error al registrar biometría"); setShowCoachBioPrompt(false); }
   };
 
   if(!splashDone) return <SplashScreen loaded={loaded}/>;
@@ -1706,13 +2287,33 @@ function AppInner() {
           </div>
         </div>
       )}
+      {showCoachBioPrompt&&(
+        <div className="pin-overlay">
+          <div className="pin-box">
+            <h3>Activar Face ID / Huella</h3>
+            <p>¿Querés activar el acceso biométrico para entrar más rápido la próxima vez?</p>
+            <div className="pin-actions">
+              <button className="btn-primary" style={{flex:1,justifyContent:"center"}} onClick={registerCoachBio}>🔐 Activar ahora</button>
+              <button className="btn-ghost" onClick={()=>setShowCoachBioPrompt(false)}>Ahora no</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="app-shell">
         <nav className="app-nav">
           <button className={`nav-btn ${mode==="member"?"active":""}`} onClick={()=>setMode("member")}><IconUser/> Mi Rutina</button>
-          <button className={`nav-btn ${mode==="coach"?"active":""}`} onClick={()=>{if(mode==="coach")return;setShowPinModal(true)}}><IconLock/> Panel Profe</button>
+          <button className={`nav-btn ${mode==="coach"?"active":""}`} onClick={()=>{if(mode==="coach")return; if(coachSessionValid()){setMode("coach");return;} setShowPinModal(true)}}><IconLock/> Panel Profe</button>
         </nav>
-        {mode==="member"&&<MemberView users={users} routines={routines} photos={photos} gymInfo={gymInfo}/>}
-        {mode==="coach"&&<CoachView users={users} setUsers={setUsers} routines={routines} setRoutines={setRoutines} photos={photos} setPhotos={setPhotos} gymInfo={gymInfo} setGymInfo={setGymInfo}/>}
+        {mode==="member"&&<MemberView users={users} setUsers={setUsers} routines={routines} photos={photos} gymInfo={gymInfo}/>}
+        {mode==="coach"&&<CoachView users={users} setUsers={setUsers} routines={routines} setRoutines={setRoutines} photos={photos} setPhotos={setPhotos} gymInfo={gymInfo} setGymInfo={setGymInfo}
+          showCoachSettings={showCoachSettings} setShowCoachSettings={setShowCoachSettings}
+          coachSettingsMsg={coachSettingsMsg} setCoachSettingsMsg={setCoachSettingsMsg}
+          coachNewPin={coachNewPin} setCoachNewPin={setCoachNewPin}
+          coachNewPin2={coachNewPin2} setCoachNewPin2={setCoachNewPin2}
+          PIN={PIN} setPIN={setPIN}
+          coachBioAvailable={coachBioAvailable} coachBioRegistered={coachBioRegistered} setCoachBioRegistered={setCoachBioRegistered}
+          registerCoachBio={registerCoachBio}
+        />}
       </div>
     </>
   );

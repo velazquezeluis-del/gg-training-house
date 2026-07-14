@@ -1530,7 +1530,7 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
     const token = await new Promise((res,rej)=>{
       const client = window.google.accounts.oauth2.initTokenClient({
         client_id: GOOGLE_CLIENT_ID,
-        scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets',
+        scope: 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets',
         callback: (t) => t.error ? rej(t.error) : res(t.access_token),
       });
       client.requestAccessToken();

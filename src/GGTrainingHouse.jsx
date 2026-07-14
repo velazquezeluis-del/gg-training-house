@@ -458,7 +458,7 @@ function driveParseDayBlocks(rows){
     if(!label) continue;
     const upper=label.toUpperCase();
     const rest=cells.slice(3);
-    if(DRIVE_SECTION_HEADERS.has(upper)){
+    if(DRIVE_SECTION_HEADERS.has(upper) || /^BLOQUE\s*\d*$/.test(upper)){
       curBlock={name:driveTitleCase(label), type:(upper.includes("MOVILIDAD")||upper.includes("CALENTAMIENTO"))?"warmup":"block", exercises:[]};
       blocks.push(curBlock);
       hasWeekCols = !!(cells[3] && cells[3].toUpperCase().startsWith("SEMANA 1"));
@@ -512,7 +512,7 @@ function driveParseDayBlocks(rows){
 }
 function driveSplitDays(rows){
   const days=[]; let cur=null;
-  const dayRe=/^DIA\s+(\d+|UNO|DOS|TRES|CUATRO|CINCO)$/i;
+  const dayRe=/^D[IÍ]A\s+(\d+|UNO|DOS|TRES|CUATRO|CINCO|SEIS|SIETE)$/i;
   for(const r of rows){
     const label=driveRowLabel(r.cells);
     if(dayRe.test(label)){ if(cur) days.push(cur); cur=[]; continue; }
@@ -1496,8 +1496,8 @@ function CoachView({ users,setUsers,routines,setRoutines,photos,setPhotos,gymInf
           failed.push(file.name);
         }
       }
-      setSyncMsg(`✓ Listo: ${created} nuevas, ${updatedCount} actualizadas${failed.length?`, ${failed.length} con error (ver consola)`:''}`);
-      setTimeout(()=>setSyncMsg(''),8000);
+      setSyncMsg(`✓ Listo: ${created} nuevas, ${updatedCount} actualizadas${failed.length?` — ⚠️ ${failed.length} con error: ${failed.join(', ')}`:''}`);
+      setTimeout(()=>setSyncMsg(''), failed.length ? 20000 : 8000);
     } catch(e) {
       console.error(e);
       setSyncMsg('Error al sincronizar. Verificá el Client ID y los permisos de Drive.');

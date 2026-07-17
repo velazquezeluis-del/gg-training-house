@@ -344,18 +344,37 @@ const db = {
 
 
 
-function compressImage(file, maxSize=200, q=0.75) {
-  return new Promise((res,rej) => {
-    const img=new Image(), url=URL.createObjectURL(file);
-    img.onload=()=>{
-      URL.revokeObjectURL(url);
-      const c=document.createElement("canvas");
-      const r=Math.min(maxSize/img.width,maxSize/img.height,1);
-      c.width=Math.round(img.width*r); c.height=Math.round(img.height*r);
-      c.getContext("2d").drawImage(img,0,0,c.width,c.height);
-      res(c.toDataURL("image/jpeg",q));
-    };
-    img.onerror=rej; img.src=url;
+function isLikelyHeic(file){
+  const type=(file.type||"").toLowerCase();
+  const name=(file.name||"").toLowerCase();
+  return type.includes("heic") || type.includes("heif") || /\.hei[cf]$/.test(name);
+}
+
+async function toDecodableBlob(file){
+  if(!isLikelyHeic(file)) return file;
+  // HEIC/HEIF (default iPhone photo format) can't be decoded by <img>/canvas in
+  // most browsers, so convert it to JPEG first using a lazy-loaded decoder.
+  const heic2any = (await import("heic2any")).default;
+  const converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.85 });
+  return Array.isArray(converted) ? converted[0] : converted;
+}
+
+function compressImage(file, maxSize=96, q=0.6) {
+  return new Promise(async (res,rej) => {
+    try {
+      const blob = await toDecodableBlob(file);
+      const img=new Image(), url=URL.createObjectURL(blob);
+      img.onload=()=>{
+        URL.revokeObjectURL(url);
+        const c=document.createElement("canvas");
+        const r=Math.min(maxSize/img.width,maxSize/img.height,1);
+        c.width=Math.round(img.width*r); c.height=Math.round(img.height*r);
+        c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+        res(c.toDataURL("image/jpeg",q));
+      };
+      img.onerror=()=>rej(new Error("No se pudo leer la imagen"));
+      img.src=url;
+    } catch(e){ rej(e); }
   });
 }
 
@@ -784,7 +803,8 @@ function MemberView({ users, setUsers, photos, gymInfo }) {
       setBiometricRegistered(true);
       setShowBiometricPrompt(false);
     } catch(e) {
-      setShowBiometricPrompt(false);
+      console.error('Error al registrar biometría', e);
+      setSettingsMsg('No se pudo activar. Probá de nuevo y confirmá con tu cara o huella cuando te lo pida.');
     }
   };
 
@@ -1205,9 +1225,15 @@ function MemberView({ users, setUsers, photos, gymInfo }) {
                   </div>
                   <input ref={photoRef} type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{
                     const file=e.target.files[0]; if(!file) return;
-                    const url=await compressImage(file);
-                    const p={...photos,[selected.id]:url};
-                    setPhotos(p); saveData(KEYS.photos,p);
+                    try {
+                      const url=await compressImage(file);
+                      const p={...photos,[selected.id]:url};
+                      setPhotos(p); saveData(KEYS.photos,p);
+                      setSettingsMsg("✓ Foto actualizada");
+                    } catch(err){
+                      console.error('Error al procesar la foto', err);
+                      setSettingsMsg("No se pudo usar esa foto. Probá sacarle una foto nueva o elegir otra imagen.");
+                    }
                     e.target.value="";
                   }}/>
                 </div>
@@ -1304,14 +1330,15 @@ function MemberView({ users, setUsers, photos, gymInfo }) {
       )}
 
       {showBiometricPrompt&&selected&&(
-        <div className="rest-overlay" onClick={()=>setShowBiometricPrompt(false)}>
+        <div className="rest-overlay" onClick={()=>{setShowBiometricPrompt(false);setSettingsMsg("");}}>
           <div className="rest-box" onClick={e=>e.stopPropagation()} style={{textAlign:"center"}}>
             <div style={{fontSize:40,marginBottom:12}}>🔐</div>
             <div className="rest-label" style={{marginBottom:8}}>ACTIVAR BIOMETRÍA</div>
             <p style={{fontSize:14,color:"var(--text2)",marginBottom:20,lineHeight:1.5}}>¿Querés usar Face ID o huella para entrar más rápido la próxima vez?</p>
+            {settingsMsg&&<p style={{fontSize:13,color:"#ff5c5c",marginBottom:14}}>{settingsMsg}</p>}
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
               <button className="login-btn" onClick={()=>registerBiometric(selected)}>Activar Face ID / Huella</button>
-              <button className="rest-skip" onClick={async()=>{await saveData("gg_biometric_asked",true);setBiometricAsked(true);setShowBiometricPrompt(false);}}>Ahora no</button>
+              <button className="rest-skip" onClick={async()=>{await saveData("gg_biometric_asked",true);setBiometricAsked(true);setShowBiometricPrompt(false);setSettingsMsg("");}}>Ahora no</button>
             </div>
           </div>
         </div>
@@ -1352,7 +1379,8 @@ function PhotoUploadBtn({ userId, currentPhoto, onSave }) {
   const handleFile=async(e)=>{
     const file=e.target.files[0]; if(!file) return;
     setLoading(true);
-    try{ onSave(userId,await compressImage(file)); }catch{}
+    try{ onSave(userId,await compressImage(file)); }
+    catch(err){ console.error('Error al procesar la foto', err); alert('No se pudo usar esa foto. Probá con otra.'); }
     setLoading(false); e.target.value="";
   };
   return(
@@ -1426,44 +1454,62 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
       if(!files.length){ setSyncMsg('No se encontraron planillas en la carpeta.'); setSyncing(false); return; }
 
       let createdCount=0, updatedCount=0; const failed=[];
-      for(let i=0;i<files.length;i++){
-        const file=files[i];
-        setSyncMsg(`Procesando ${i+1}/${files.length}: ${file.name}...`);
-        try{
-          const sheetResp = await fetch(
-            `https://sheets.googleapis.com/v4/spreadsheets/${file.id}?includeGridData=true&fields=sheets(data(rowData(values(formattedValue))),merges)`,
-            {headers:{Authorization:`Bearer ${token}`}}
-          );
-          const sheetJson = await sheetResp.json();
-          const sheet = sheetJson.sheets && sheetJson.sheets[0];
-          if(!sheet){ failed.push(file.name); continue; }
-          const grid = buildGridFromSheet(sheet);
-          const routine = parseRoutineFromGrid(file.name, grid);
-          if(!routine.days.length){ failed.push(`${file.name} (sin días detectados)`); continue; }
+      const CONCURRENCY=8;
+      let doneCount=0;
+      for(let b=0;b<files.length;b+=CONCURRENCY){
+        const batch=files.slice(b,b+CONCURRENCY);
+        await Promise.all(batch.map(async(file)=>{
+          try{
+            const sheetResp = await fetch(
+              `https://sheets.googleapis.com/v4/spreadsheets/${file.id}?includeGridData=true&fields=sheets(data(rowData(values(formattedValue))),merges)`,
+              {headers:{Authorization:`Bearer ${token}`}}
+            );
+            const sheetJson = await sheetResp.json();
+            const sheet = sheetJson.sheets && sheetJson.sheets[0];
+            if(!sheet){ failed.push(file.name); return; }
+            const grid = buildGridFromSheet(sheet);
+            const routine = parseRoutineFromGrid(file.name, grid);
+            if(!routine.days.length){ failed.push(`${file.name} (sin días detectados)`); return; }
 
-          const matchedUser = users.find(u=>u.name.trim().toLowerCase()===file.name.trim().toLowerCase());
-          if(matchedUser){
-            await db.updateUser(matchedUser.id, {days:routine.days, drive_file_id:file.id});
-            setUsers(us=>us.map(u=>u.id===matchedUser.id?{...u,days:routine.days,driveFileId:file.id}:u));
-            updatedCount++;
-          } else {
-            const createdRows = await db.createUser({name:routine.name.trim(), active:true, cuota:true, days:routine.days, drive_file_id:file.id});
-            if(createdRows?.[0]){
-              setUsers(us=>[...us, {id:createdRows[0].id, name:routine.name.trim(), active:true, cuota:true, days:routine.days, driveFileId:file.id, photo:null, startDate:null}]);
-              createdCount++;
+            const matchedUser = users.find(u=>u.name.trim().toLowerCase()===file.name.trim().toLowerCase());
+            if(matchedUser){
+              await db.updateUser(matchedUser.id, {days:routine.days, drive_file_id:file.id});
+              setUsers(us=>us.map(u=>u.id===matchedUser.id?{...u,days:routine.days,driveFileId:file.id}:u));
+              updatedCount++;
             } else {
-              failed.push(`${file.name} (no se pudo crear el alumno)`);
+              const createdRows = await db.createUser({name:routine.name.trim(), active:true, cuota:true, days:routine.days, drive_file_id:file.id});
+              if(createdRows?.[0]){
+                setUsers(us=>[...us, {id:createdRows[0].id, name:routine.name.trim(), active:true, cuota:true, days:routine.days, driveFileId:file.id, photo:null, startDate:null}]);
+                createdCount++;
+              } else {
+                failed.push(`${file.name} (no se pudo crear el alumno)`);
+              }
             }
+          } catch(e){
+            console.error(e);
+            failed.push(file.name);
+          } finally {
+            doneCount++;
+            setSyncMsg(`Procesando ${doneCount}/${files.length}...`);
           }
-        } catch(e){
-          console.error(e);
-          failed.push(file.name);
-        }
+        }));
       }
 
+      // Full mirror: any alumno in the app that no longer has a matching Drive
+      // file gets removed too (Google Sheets is the single source of truth).
+      const seenNames = new Set(files.map(f=>f.name.trim().toLowerCase()));
+      const orphans = users.filter(u=>!seenNames.has(u.name.trim().toLowerCase()));
+      await Promise.all(orphans.map(async(orphan)=>{
+        try{
+          await db.deleteUser(orphan.id);
+          setUsers(us=>us.filter(u=>u.id!==orphan.id));
+        } catch(e){ console.error('No se pudo borrar alumno huérfano', orphan.name, e); }
+      }));
+
       setSyncMsg(`✓ Listo: ${createdCount} alumno(s) nuevo(s), ${updatedCount} rutinas actualizadas`
+        + `${orphans.length?`, ${orphans.length} alumno(s) borrado(s) (${orphans.map(o=>o.name).join(', ')})`:''}`
         + `${failed.length?` — ⚠️ ${failed.length} con error: ${failed.join(', ')}`:''}`);
-      setTimeout(()=>setSyncMsg(''), failed.length ? 20000 : 8000);
+      setTimeout(()=>setSyncMsg(''), (failed.length||orphans.length) ? 20000 : 8000);
     } catch(e) {
       console.error(e);
       setSyncMsg('Error al sincronizar. Verificá el Client ID y los permisos de Drive.');

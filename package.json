@@ -9,12 +9,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "heic2any": "^0.0.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
     "@cloudflare/vite-plugin": "^1.44.0",
+    "@vitejs/plugin-react": "^4.3.4",
     "vite": "^6.3.0"
   }
 }

@@ -102,6 +102,8 @@ function GGApp() {
  @keyframes slideUp{from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)}}
  .routine-header{padding:20px;background:var(--surface2);border-bottom:1px solid var(--border)}
  .back-btn{background:none;border:none;color:var(--gold);font-size:13px;font-weight:600;padding:0 0 12px;cursor:pointer;display:block;letter-spacing:.5px}
+ .exit-btn{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:999px;background:linear-gradient(135deg,rgba(245,197,24,0.16),rgba(245,197,24,0.05));border:1px solid rgba(245,197,24,0.4);color:var(--gold);font-family:var(--font-body);font-weight:700;font-size:14px;cursor:pointer;transition:all .2s}
+ .exit-btn:hover{background:linear-gradient(135deg,rgba(245,197,24,0.26),rgba(245,197,24,0.1));border-color:var(--gold)}
 
  .day-tabs{display:flex;overflow-x:auto;border-bottom:1px solid var(--border);scrollbar-width:none}
  .day-tabs::-webkit-scrollbar{display:none}
@@ -186,11 +188,12 @@ function GGApp() {
  .btn-primary.sm{padding:8px 14px;font-size:13px}
  .btn-save{display:flex;align-items:center;gap:6px;padding:12px 24px;border-radius:8px;background:var(--gold);color:#000;border:none;font-family:var(--font-display);font-size:16px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;cursor:pointer}
  .btn-ghost{padding:10px 16px;border-radius:8px;background:none;border:1px solid var(--border);color:var(--text2);font-family:var(--font-body);font-size:14px;cursor:pointer;transition:all .15s}
- .btn-sync{display:flex;align-items:center;gap:7px;padding:9px 14px;border-radius:999px;background:linear-gradient(135deg,rgba(245,197,24,0.12),rgba(245,197,24,0.04));border:1px solid rgba(245,197,24,0.35);color:var(--gold);font-family:var(--font-body);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s}
+ .btn-sync{display:flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;background:linear-gradient(135deg,rgba(245,197,24,0.12),rgba(245,197,24,0.04));border:1px solid rgba(245,197,24,0.35);color:var(--gold);font-family:var(--font-body);font-size:12.5px;font-weight:600;cursor:pointer;transition:all .2s}
  .btn-sync:hover:not(:disabled){background:linear-gradient(135deg,rgba(245,197,24,0.2),rgba(245,197,24,0.08));border-color:var(--gold)}
  .btn-sync:disabled{opacity:.7;cursor:default}
  .btn-sync .sync-icon{display:flex;transition:transform .2s}
  .btn-sync.spinning .sync-icon{animation:syncSpin 1s linear infinite}
+ .spin-icon{animation:syncSpin 1s linear infinite}
  @keyframes syncSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
  .btn-ghost:hover{background:var(--surface2)}
  .btn-ghost.sm{padding:8px 12px;font-size:13px}
@@ -340,6 +343,8 @@ const db = {
   updateGymInfo: (data) => supa("gym_info?id=eq.1", {method:"PATCH",body:JSON.stringify(data)}),
   getTrainingLogAll: () => supa("training_log?select=user_id,date"),
   markTrained: (userId, date) => supa("training_log", {method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=representation"}, body:JSON.stringify({user_id:userId, date})}),
+  bulkUpsertUsers: (rows) => supa("users?on_conflict=id", {method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=representation"}, body:JSON.stringify(rows)}),
+  bulkDeleteUsers: (ids) => supa(`users?id=in.(${ids.join(",")})`, {method:"DELETE"}),
 };
 
 
@@ -354,9 +359,14 @@ async function toDecodableBlob(file){
   if(!isLikelyHeic(file)) return file;
   // HEIC/HEIF (default iPhone photo format) can't be decoded by <img>/canvas in
   // most browsers, so convert it to JPEG first using a lazy-loaded decoder.
-  const heic2any = (await import("heic2any")).default;
-  const converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.85 });
-  return Array.isArray(converted) ? converted[0] : converted;
+  try {
+    const heic2any = (await import("heic2any")).default;
+    const converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.85 });
+    return Array.isArray(converted) ? converted[0] : converted;
+  } catch(e){
+    console.error("No se pudo convertir HEIC (¿sin conexión para bajar el conversor?), probando con el archivo original.", e);
+    return file; // last-ditch fallback: some browsers can still decode HEIC natively
+  }
 }
 
 function compressImage(file, maxSize=96, q=0.6) {
@@ -372,7 +382,7 @@ function compressImage(file, maxSize=96, q=0.6) {
         c.getContext("2d").drawImage(img,0,0,c.width,c.height);
         res(c.toDataURL("image/jpeg",q));
       };
-      img.onerror=()=>rej(new Error("No se pudo leer la imagen"));
+      img.onerror=()=>rej(new Error("El navegador no pudo abrir esta imagen"));
       img.src=url;
     } catch(e){ rej(e); }
   });
@@ -412,6 +422,7 @@ const IconTrash=()=><Icon d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>;
 const IconEdit=()=><Icon d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>;
 const IconCheck=()=><Icon d="M20 6L9 17l-5-5"/>;
 const IconX=()=><Icon d="M18 6L6 18M6 6l12 12"/>;
+const IconLogout=()=><Icon d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>;
 const IconLock=()=><Icon d="M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2zM7 11V7a5 5 0 0 1 10 0v4"/>;
 const IconEye=()=>(<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>);
 const IconEyeOff=()=>(<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>);
@@ -586,14 +597,23 @@ function buildGridFromRoutine(routine){
   return rows;
 }
 
-function MemberView({ users, setUsers, photos, gymInfo }) {
+function MemberView({ users, setUsers, photos, gymInfo, onInsideChange }) {
   const [selected, setSelected] = useState(null);
+  useEffect(()=>{ onInsideChange?.(!!selected); },[selected]);
   const [activeDay, setActiveDay] = useState(0);
   const [done, setDone] = useState({});
   const [restTimer, setRestTimer] = useState(null);
   const [trainLog, setTrainLog] = useState({});
   const [pins, setPins] = useState({});
   const [loginFlow, setLoginFlow] = useState(null);
+  const autoBioTriedRef = useRef(null);
+  useEffect(()=>{
+    if(loginFlow?.mode==='login' && biometricRegistered && biometricAvailable && autoBioTriedRef.current!==loginFlow.user.id){
+      autoBioTriedRef.current = loginFlow.user.id;
+      handleBiometricLogin();
+    }
+    if(!loginFlow) autoBioTriedRef.current = null;
+  },[loginFlow, biometricRegistered, biometricAvailable]);
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginPass2, setLoginPass2] = useState("");
@@ -1112,7 +1132,7 @@ function MemberView({ users, setUsers, photos, gymInfo }) {
       {selected&&(
         <div className="routine-card">
           <div className="routine-header">
-            <button className="back-btn" onClick={()=>{setSelected(null);setDone({});setActiveDay(0);saveData("gg_session",null);}}>← Salir</button>
+            <button className="exit-btn" style={{marginBottom:16}} onClick={()=>{setSelected(null);setDone({});setActiveDay(0);saveData("gg_session",null);}}><IconLogout/> Salir</button>
           </div>
           {selected&&users.find(u=>u.id===selected.id)?.cuota===false?(
             <div className="no-routine" style={{gap:16}}>
@@ -1221,7 +1241,16 @@ function MemberView({ users, setUsers, photos, gymInfo }) {
                   </div>
                   <div>
                     <div style={{fontSize:14,fontWeight:600,marginBottom:6}}>{selected.name}</div>
-                    <button style={{background:"none",border:"1px solid var(--border)",color:"var(--text2)",borderRadius:6,padding:"5px 10px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6}} onClick={()=>photoRef.current.click()}><IconCamera/> Cambiar foto</button>
+                    <div style={{display:"flex",gap:8}}>
+                      <button style={{background:"none",border:"1px solid var(--border)",color:"var(--text2)",borderRadius:6,padding:"5px 10px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6}} onClick={()=>photoRef.current.click()}><IconCamera/> Cambiar foto</button>
+                      {photos[selected.id]&&(
+                        <button style={{background:"none",border:"1px solid var(--border)",color:"#ff5c5c",borderRadius:6,padding:"5px 10px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6}} onClick={()=>{
+                          const p={...photos}; delete p[selected.id];
+                          setPhotos(p); saveData(KEYS.photos,p);
+                          setSettingsMsg("✓ Foto eliminada");
+                        }}><IconTrash/> Eliminar</button>
+                      )}
+                    </div>
                   </div>
                   <input ref={photoRef} type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{
                     const file=e.target.files[0]; if(!file) return;
@@ -1232,7 +1261,7 @@ function MemberView({ users, setUsers, photos, gymInfo }) {
                       setSettingsMsg("✓ Foto actualizada");
                     } catch(err){
                       console.error('Error al procesar la foto', err);
-                      setSettingsMsg("No se pudo usar esa foto. Probá sacarle una foto nueva o elegir otra imagen.");
+                      setSettingsMsg(`No se pudo usar esa foto (${err&&err.message?err.message:"error desconocido"}). Probá con otra o revisá tu conexión.`);
                     }
                     e.target.value="";
                   }}/>
@@ -1395,7 +1424,7 @@ function PhotoUploadBtn({ userId, currentPhoto, onSave }) {
 function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
   showCoachSettings,setShowCoachSettings,coachSettingsMsg,setCoachSettingsMsg,
   coachNewPin,setCoachNewPin,coachNewPin2,setCoachNewPin2,PIN,setPIN,
-  coachBioAvailable,coachBioRegistered,setCoachBioRegistered,registerCoachBio }) {
+  coachBioAvailable,coachBioRegistered,setCoachBioRegistered,registerCoachBio,onExit }) {
   const [tab,setTab]=useState("users");
   const [editRoutine,setEditRoutine]=useState(null);
   const [userSearch,setUserSearch]=useState("");
@@ -1404,6 +1433,7 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
   const [infoNovedad,setInfoNovedad]=useState(gymInfo.novedad||"");
   const [infoHorario,setInfoHorario]=useState(gymInfo.horario||"");
   const [infoSaved,setInfoSaved]=useState(false);
+  const [infoSaveStatus,setInfoSaveStatus]=useState(null); // null | 'saving' | 'done'
   const [showNewUser,setShowNewUser]=useState(false);
   const [newUserName,setNewUserName]=useState("");
   const [confirmDelete,setConfirmDelete]=useState(null);
@@ -1453,9 +1483,10 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
       const files = (listData.files||[]).filter(f=>!/protocolo/i.test(f.name));
       if(!files.length){ setSyncMsg('No se encontraron planillas en la carpeta.'); setSyncing(false); return; }
 
-      let createdCount=0, updatedCount=0; const failed=[];
-      const CONCURRENCY=8;
+      const failed=[];
+      const CONCURRENCY=15; // just Sheets API reads here — cheap, so go wider
       let doneCount=0;
+      const parsedResults=[]; // {file, routine} for successfully parsed sheets
       for(let b=0;b<files.length;b+=CONCURRENCY){
         const batch=files.slice(b,b+CONCURRENCY);
         await Promise.all(batch.map(async(file)=>{
@@ -1470,41 +1501,63 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
             const grid = buildGridFromSheet(sheet);
             const routine = parseRoutineFromGrid(file.name, grid);
             if(!routine.days.length){ failed.push(`${file.name} (sin días detectados)`); return; }
-
-            const matchedUser = users.find(u=>u.name.trim().toLowerCase()===file.name.trim().toLowerCase());
-            if(matchedUser){
-              await db.updateUser(matchedUser.id, {days:routine.days, drive_file_id:file.id});
-              setUsers(us=>us.map(u=>u.id===matchedUser.id?{...u,days:routine.days,driveFileId:file.id}:u));
-              updatedCount++;
-            } else {
-              const createdRows = await db.createUser({name:routine.name.trim(), active:true, cuota:true, days:routine.days, drive_file_id:file.id});
-              if(createdRows?.[0]){
-                setUsers(us=>[...us, {id:createdRows[0].id, name:routine.name.trim(), active:true, cuota:true, days:routine.days, driveFileId:file.id, photo:null, startDate:null}]);
-                createdCount++;
-              } else {
-                failed.push(`${file.name} (no se pudo crear el alumno)`);
-              }
-            }
+            parsedResults.push({file, routine});
           } catch(e){
             console.error(e);
             failed.push(file.name);
           } finally {
             doneCount++;
-            setSyncMsg(`Procesando ${doneCount}/${files.length}...`);
+            setSyncMsg(`Leyendo planillas... ${doneCount}/${files.length}`);
           }
         }));
+      }
+
+      // Build one single bulk upsert instead of one request per alumno
+      setSyncMsg('Guardando cambios...');
+      let createdCount=0, updatedCount=0;
+      const rows=[];
+      parsedResults.forEach(({file,routine})=>{
+        const matchedUser = users.find(u=>u.name.trim().toLowerCase()===file.name.trim().toLowerCase());
+        if(matchedUser){
+          rows.push({id:matchedUser.id, days:routine.days, drive_file_id:file.id});
+          updatedCount++;
+        } else {
+          rows.push({name:routine.name.trim(), active:true, cuota:true, days:routine.days, drive_file_id:file.id});
+          createdCount++;
+        }
+      });
+
+      if(rows.length){
+        try{
+          const saved = await db.bulkUpsertUsers(rows);
+          setUsers(us=>{
+            const byId=new Map(us.map(u=>[u.id,u]));
+            (saved||[]).forEach(r=>{
+              byId.set(r.id, {
+                id:r.id, name:r.name, active:r.active, cuota:r.cuota,
+                photo:byId.get(r.id)?.photo||null, startDate:r.start_date||byId.get(r.id)?.startDate||null,
+                days:r.days, driveFileId:r.drive_file_id
+              });
+            });
+            return Array.from(byId.values());
+          });
+        } catch(e){
+          console.error(e);
+          failed.push(`Error al guardar en la base (${rows.length} alumnos afectados)`);
+          createdCount=0; updatedCount=0;
+        }
       }
 
       // Full mirror: any alumno in the app that no longer has a matching Drive
       // file gets removed too (Google Sheets is the single source of truth).
       const seenNames = new Set(files.map(f=>f.name.trim().toLowerCase()));
       const orphans = users.filter(u=>!seenNames.has(u.name.trim().toLowerCase()));
-      await Promise.all(orphans.map(async(orphan)=>{
+      if(orphans.length){
         try{
-          await db.deleteUser(orphan.id);
-          setUsers(us=>us.filter(u=>u.id!==orphan.id));
-        } catch(e){ console.error('No se pudo borrar alumno huérfano', orphan.name, e); }
-      }));
+          await db.bulkDeleteUsers(orphans.map(o=>o.id));
+          setUsers(us=>us.filter(u=>!orphans.some(o=>o.id===u.id)));
+        } catch(e){ console.error('No se pudo borrar alumnos huérfanos', e); }
+      }
 
       setSyncMsg(`✓ Listo: ${createdCount} alumno(s) nuevo(s), ${updatedCount} rutinas actualizadas`
         + `${orphans.length?`, ${orphans.length} alumno(s) borrado(s) (${orphans.map(o=>o.name).join(', ')})`:''}`
@@ -1541,6 +1594,17 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
     driveTokenRef.current = {token, expiresAt: Date.now()+55*60*1000}; // Google tokens last ~1h; refresh a bit early
     return token;
   };
+
+  // Auto-sync once an hour, silently — never prompts a Google login popup on
+  // its own. If there's no valid cached token yet, it just skips that hour.
+  useEffect(()=>{
+    const interval = setInterval(()=>{
+      if(driveTokenRef.current.token && Date.now()<driveTokenRef.current.expiresAt){
+        syncWithDrive();
+      }
+    }, 60*60*1000);
+    return ()=>clearInterval(interval);
+  },[]);
   const pushRoutineToDrive = async (routine) => {
     setPushingDrive(true);
     setSyncMsg('Sincronizando con Drive...');
@@ -1712,7 +1776,10 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
       <div className="coach-header">
         <div className="coach-brand" style={{justifyContent:"space-between"}}>
           <div style={{display:"flex",alignItems:"center",gap:8}}><span className="brand-dot"/><span>Panel Profe</span></div>
-          <button style={{background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:18,padding:0}} onClick={()=>{setShowCoachSettings(true);setCoachSettingsView('main');setCoachSettingsMsg("");setCoachNewPin("");setCoachNewPin2("");}}>⚙</button>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <button className="exit-btn" style={{padding:"7px 14px",fontSize:13}} onClick={onExit}><IconLogout/> Salir</button>
+            <button style={{background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:18,padding:0}} onClick={()=>{setShowCoachSettings(true);setCoachSettingsView('main');setCoachSettingsMsg("");setCoachNewPin("");setCoachNewPin2("");}}>⚙</button>
+          </div>
         </div>
         <div className="coach-tabs">
           <button className={`ctab ${tab==="users"?"active":""}`} onClick={()=>switchTab("users")}><IconUser/> Alumnos</button>
@@ -1908,12 +1975,12 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
         <div className="tab-content">
           <div className="tab-topbar">
             <h2>Alumnos <span className="count-badge">{users.length}</span></h2>
-            <div style={{display:"flex",gap:8}}>
-              <button className={`btn-sync${syncing?" spinning":""}`} disabled={syncing} onClick={syncWithDrive}>
-                <span className="sync-icon"><IconRefresh/></span> {syncing?"Sincronizando...":"Actualizar desde Drive"}
-              </button>
-              <button className="btn-primary" onClick={()=>setShowNewUser(v=>!v)}><IconPlus/> Nuevo</button>
-            </div>
+            <button className="btn-primary" onClick={()=>setShowNewUser(v=>!v)}><IconPlus/> Nuevo</button>
+          </div>
+          <div style={{marginBottom:14}}>
+            <button className={`btn-sync${syncing?" spinning":""}`} disabled={syncing} onClick={syncWithDrive}>
+              <span className="sync-icon"><IconRefresh/></span> {syncing?"Sincronizando...":"Sincronizar con Drive"}
+            </button>
           </div>
           {syncMsg&&<div style={{fontSize:13,color:"var(--gold)",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 12px",marginBottom:12}}>{syncMsg}</div>}
 
@@ -2019,13 +2086,39 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
             <label style={{display:"block",fontSize:12,color:"var(--text3)",letterSpacing:.5,marginBottom:6,textTransform:"uppercase",fontWeight:600}}>🕐 Horarios</label>
             <textarea value={infoHorario} onChange={e=>{setInfoHorario(e.target.value);setInfoSaved(false);}} placeholder={"Ej:\nLunes a viernes: 7hs a 22hs\nSábados: 9hs a 14hs"} rows={4}
               style={{width:"100%",boxSizing:"border-box",padding:"11px 14px",borderRadius:9,border:"1px solid var(--border)",background:"var(--surface2)",color:"var(--text)",fontSize:14,outline:"none",resize:"vertical",marginBottom:16,fontFamily:"inherit"}}/>
-            <button className="btn-primary" style={{width:"100%",justifyContent:"center"}} onClick={async()=>{
+            <button className="btn-primary" style={{width:"100%",justifyContent:"center"}} disabled={infoSaveStatus==='saving'} onClick={async()=>{
+              setInfoSaveStatus('saving');
               const updated={novedad:infoNovedad,horario:infoHorario};
               setGymInfo(updated);
-              await db.updateGymInfo({novedad:infoNovedad,horario:infoHorario});
-              setInfoSaved(true);
+              try {
+                await db.updateGymInfo({novedad:infoNovedad,horario:infoHorario});
+                setInfoSaved(true);
+                setInfoSaveStatus('done');
+              } catch(e){
+                console.error(e);
+                setInfoSaveStatus(null);
+              }
+              setTimeout(()=>setInfoSaveStatus(null), 1300);
             }}>Guardar</button>
-            {infoSaved&&<p style={{textAlign:"center",color:"var(--gold)",fontSize:13,marginTop:10}}>✓ Guardado</p>}
+            {infoSaved&&infoSaveStatus===null&&<p style={{textAlign:"center",color:"var(--gold)",fontSize:13,marginTop:10}}>✓ Guardado</p>}
+          </div>
+        </div>
+      )}
+
+      {infoSaveStatus&&(
+        <div className="rest-overlay">
+          <div className="rest-box" style={{width:"80%",maxWidth:260,padding:28,textAlign:"center"}}>
+            {infoSaveStatus==='saving'?(
+              <>
+                <div className="spin-icon" style={{display:"inline-flex",marginBottom:14,color:"var(--gold)"}}><IconRefresh size={34}/></div>
+                <div style={{fontWeight:700,fontSize:15}}>Enviando...</div>
+              </>
+            ):(
+              <>
+                <div style={{fontSize:40,marginBottom:10,color:"var(--gold)"}}>✓</div>
+                <div style={{fontWeight:700,fontSize:15}}>Enviado</div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -2074,6 +2167,7 @@ function AppInner() {
   const [coachPin,setCoachPin]=useState("");
   const [pinError,setPinError]=useState(false);
   const [showPinModal,setShowPinModal]=useState(false);
+  const [memberInside,setMemberInside]=useState(false);
   const [splashDone,setSplashDone]=useState(false);
   const splashStartTime=useRef(Date.now());
   const [PIN, setPIN] = useState("1234");
@@ -2238,11 +2332,13 @@ function AppInner() {
         </div>
       )}
       <div className="app-shell">
-        <nav className="app-nav">
-          <button className={`nav-btn ${mode==="member"?"active":""}`} onClick={()=>setMode("member")}><IconUser/> Mi Rutina</button>
-          <button className={`nav-btn ${mode==="coach"?"active":""}`} onClick={()=>{if(mode==="coach")return; if(coachSessionValid()){setMode("coach");return;} setShowPinModal(true)}}><IconLock/> Panel Profe</button>
-        </nav>
-        {mode==="member"&&<MemberView users={users} setUsers={setUsers} photos={photos} gymInfo={gymInfo}/>}
+        {!(mode==="coach" || (mode==="member" && memberInside)) && (
+          <nav className="app-nav">
+            <button className={`nav-btn ${mode==="member"?"active":""}`} onClick={()=>setMode("member")}><IconUser/> Mi Rutina</button>
+            <button className={`nav-btn ${mode==="coach"?"active":""}`} onClick={()=>{if(mode==="coach")return; if(coachSessionValid()){setMode("coach");return;} setShowPinModal(true)}}><IconLock/> Panel Profe</button>
+          </nav>
+        )}
+        {mode==="member"&&<MemberView users={users} setUsers={setUsers} photos={photos} gymInfo={gymInfo} onInsideChange={setMemberInside}/>}
         {mode==="coach"&&<CoachView users={users} setUsers={setUsers} photos={photos} setPhotos={setPhotos} gymInfo={gymInfo} setGymInfo={setGymInfo}
           showCoachSettings={showCoachSettings} setShowCoachSettings={setShowCoachSettings}
           coachSettingsMsg={coachSettingsMsg} setCoachSettingsMsg={setCoachSettingsMsg}
@@ -2251,6 +2347,7 @@ function AppInner() {
           PIN={PIN} setPIN={setPIN}
           coachBioAvailable={coachBioAvailable} coachBioRegistered={coachBioRegistered} setCoachBioRegistered={setCoachBioRegistered}
           registerCoachBio={registerCoachBio}
+          onExit={()=>setMode("member")}
         />}
       </div>
     </>

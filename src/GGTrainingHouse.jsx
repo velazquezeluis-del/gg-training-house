@@ -11,8 +11,8 @@ function driveFilesListUrl(){
   const q = `'${DRIVE_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
   return `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true`;
 }
-const GYM_LAT = -34.7215;
-const GYM_LNG = -58.2785;
+const GYM_LAT = -34.730867;
+const GYM_LNG = -58.292175;
 const GYM_RADIUS_M = 150;
 
 // Supabase config
@@ -1400,36 +1400,6 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
     setTab(t);
   };
 
-  // Trigger 3: sync once as soon as the coach opens the panel (PIN or biometric entry)
-  useEffect(()=>{ syncWithDrive(); },[]);
-
-  const lastModifiedRef = useRef({}); // fileId -> last-seen modifiedTime, to detect real changes
-  const checkForDriveChanges = async () => {
-    // Never prompt a login popup from a silent background check — only run
-    // this if we already have a valid cached token from an earlier manual sync/save.
-    if(!driveTokenRef.current.token || Date.now()>=driveTokenRef.current.expiresAt) return;
-    try {
-      const listResp = await fetch(
-        driveFilesListUrl(),
-        {headers:{Authorization:`Bearer ${driveTokenRef.current.token}`}}
-      );
-      const listData = await listResp.json();
-      const files = (listData.files||[]).filter(f=>!/protocolo/i.test(f.name));
-      const changed = files.some(f=>lastModifiedRef.current[f.id]!==f.modifiedTime);
-      if(changed){
-        files.forEach(f=>{ lastModifiedRef.current[f.id]=f.modifiedTime; });
-        syncWithDrive();
-      }
-    } catch(e){ console.error('Chequeo de cambios en Drive falló silenciosamente', e); }
-  };
-
-  useEffect(()=>{
-    if(tab!=="users") return;
-    checkForDriveChanges(); // check right away when entering the tab...
-    const interval=setInterval(checkForDriveChanges, 3*60*1000); // ...and every 3 minutes after
-    return ()=>clearInterval(interval);
-  },[tab]);
-
   const syncWithDrive = async () => {
     if(!GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID.includes('TU_CLIENT_ID')){
       setSyncMsg('⚠️ Falta configurar el Client ID de Google (ver comentario junto a GOOGLE_CLIENT_ID en el código).');
@@ -1453,7 +1423,6 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
         setSyncing(false); return;
       }
       const files = (listData.files||[]).filter(f=>!/protocolo/i.test(f.name));
-      files.forEach(f=>{ lastModifiedRef.current[f.id]=f.modifiedTime; });
       if(!files.length){ setSyncMsg('No se encontraron planillas en la carpeta.'); setSyncing(false); return; }
 
       let createdCount=0, updatedCount=0; const failed=[];

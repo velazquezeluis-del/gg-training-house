@@ -607,13 +607,6 @@ function MemberView({ users, setUsers, photos, gymInfo, onInsideChange }) {
   const [pins, setPins] = useState({});
   const [loginFlow, setLoginFlow] = useState(null);
   const autoBioTriedRef = useRef(null);
-  useEffect(()=>{
-    if(loginFlow?.mode==='login' && biometricRegistered && biometricAvailable && autoBioTriedRef.current!==loginFlow.user.id){
-      autoBioTriedRef.current = loginFlow.user.id;
-      handleBiometricLogin();
-    }
-    if(!loginFlow) autoBioTriedRef.current = null;
-  },[loginFlow, biometricRegistered, biometricAvailable]);
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginPass2, setLoginPass2] = useState("");
@@ -629,6 +622,13 @@ function MemberView({ users, setUsers, photos, gymInfo, onInsideChange }) {
   const [biometricRegistered, setBiometricRegistered] = useState(false);
   const [biometricAsked, setBiometricAsked] = useState(false);
   const [showBiometricPrompt, setShowBiometricPrompt] = useState(false);
+  useEffect(()=>{
+    if(loginFlow?.mode==='login' && biometricRegistered && biometricAvailable && autoBioTriedRef.current!==loginFlow.user.id){
+      autoBioTriedRef.current = loginFlow.user.id;
+      handleBiometricLogin();
+    }
+    if(!loginFlow) autoBioTriedRef.current = null;
+  },[loginFlow, biometricRegistered, biometricAvailable]);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsView, setSettingsView] = useState('main'); // 'main' | 'password'
   const [newPass, setNewPass] = useState("");

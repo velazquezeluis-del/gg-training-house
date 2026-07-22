@@ -1075,7 +1075,6 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
           .filter(u=>u.count>0)
           .sort((a,b)=>b.count-a.count)
           .slice(0,5);
-        if(!scores.length) return null;
         const medals=['🥇','🥈','🥉','4️⃣','5️⃣'];
         return (
           <div style={{margin:"12px 16px",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,overflow:"hidden"}}>
@@ -1083,6 +1082,9 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               <span style={{fontSize:16}}>🏆</span>
               <span style={{fontFamily:"var(--font-display)",fontSize:14,fontWeight:700,letterSpacing:.5,textTransform:"uppercase",color:"var(--gold)"}}>Top entrenamientos</span>
             </div>
+            {!scores.length&&(
+              <div style={{padding:"16px 14px",textAlign:"center",fontSize:13,color:"var(--text3)"}}>Todavía no hay entrenamientos esta semana</div>
+            )}
             {scores.map((u,i)=>(
               <div key={u.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",borderBottom:i<scores.length-1?"1px solid var(--border)":"none"}}>
                 <span style={{fontSize:18,width:28,textAlign:"center"}}>{medals[i]}</span>

@@ -691,28 +691,33 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     loadData('gg_biometric_registered',false).then(v=>setBiometricRegistered(!!v));
     loadData('gg_biometric_asked',false).then(v=>setBiometricAsked(!!v));
   },[]);
+  const sessionRestoredRef = useRef(false);
   useEffect(()=>{
     loadData(KEYS.device,null).then(async d=>{
       setDeviceUser(d);
-      // Restore session if < 3 hours old
-      if(d){
-        const session = await loadData('gg_session', null);
-        if(session && session.userId === d.id){
-          const elapsed = Date.now() - session.ts;
-          const THREE_HOURS = 3 * 60 * 60 * 1000;
-          if(elapsed < THREE_HOURS){
-            const u = users.find(x=>x.id===d.id);
-            if(u && pins[u.id]){
-              setSelected(u);
-              setActiveDay(0);
-              setDone({});
-            }
-          }
-        }
-      }
       setDeviceLoaded(true);
     });
   },[]);
+  useEffect(()=>{
+    if(sessionRestoredRef.current) return;
+    if(!deviceLoaded || !deviceUser) return;
+    if(!users.length || Object.keys(pins).length===0) return; // wait for both to actually load
+    (async()=>{
+      const session = await loadData('gg_session', null);
+      if(session && session.userId === deviceUser.id){
+        const elapsed = Date.now() - session.ts;
+        const THREE_HOURS = 3 * 60 * 60 * 1000;
+        if(elapsed < THREE_HOURS){
+          const u = users.find(x=>x.id===deviceUser.id);
+          if(u && pins[u.id]){
+            sessionRestoredRef.current = true;
+            setSelected(u);
+            if(typeof session.activeDay === 'number') setActiveDay(session.activeDay);
+          }
+        }
+      }
+    })();
+  },[deviceLoaded, deviceUser, users, pins]);
 
   // Reset done state every Sunday at 00:00
   useEffect(()=>{
@@ -785,6 +790,14 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     const days=Math.floor((Date.now()-start.getTime())/86400000);
     return Math.min(4, Math.max(1, Math.floor(days/7)+1));
   };
+
+  useEffect(()=>{
+    if(selected){
+      loadData('gg_session',null).then(s=>{
+        if(s && s.userId===selected.id) saveData('gg_session', {...s, activeDay});
+      });
+    }
+  },[activeDay, selected?.id]);
 
   const doLogin=(u)=>{
     // Bind this device to the user (first login)

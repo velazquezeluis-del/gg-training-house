@@ -1112,7 +1112,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
         <div className="member-list">
           {!deviceLoaded ? (
             <p className="ml-empty">Cargando...</p>
-          ) : boundUser ? (
+          ) : effectiveBoundUser ? (
             // Device bound: show only this user
             <>
               <button className="member-list-item" onClick={()=>{setLoginFlow({mode:'login',user:effectiveBoundUser});setLoginPass("");setLoginError("");}}>
@@ -1126,7 +1126,10 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                 </div>
                 <span className="ml-arrow">›</span>
               </button>
-              <div style={{padding:"12px 20px",borderTop:"1px solid var(--border)"}}>
+              <div style={{padding:"12px 20px",borderTop:"1px solid var(--border)",display:"flex",flexDirection:"column",gap:8}}>
+                <button style={{background:"none",border:"none",color:"var(--gold)",fontSize:12,fontWeight:600,cursor:"pointer",padding:0}} onClick={()=>setLoginFlow({mode:'pickOther'})}>
+                  Iniciar sesión con otro alumno
+                </button>
                 <button style={{background:"none",border:"none",color:"var(--text3)",fontSize:12,cursor:"pointer",padding:0}} onClick={()=>setLoginFlow({mode:'unlink'})}>
                   ¿No sos {effectiveBoundUser.name}? Cambiar cuenta
                 </button>
@@ -1160,6 +1163,37 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               )}
               {users.filter(u=>u.active!==false).length===0&&(<p className="ml-empty">No hay alumnos activos</p>)}
             </>
+          )}
+        </div>
+      )}
+
+      {!selected&&loginFlow&&loginFlow.mode==='pickOther'&&(
+        <div className="member-list">
+          <div style={{padding:"10px 16px",borderBottom:"1px solid var(--border)"}}>
+            <button style={{background:"none",border:"none",color:"var(--gold)",fontSize:13,fontWeight:600,cursor:"pointer",padding:0}} onClick={()=>setLoginFlow(null)}>← Volver</button>
+          </div>
+          {users.filter(u=>u.active!==false&&u.pin).map(u=>{
+            const hasRoutine=u.days&&u.days.length;
+            const trainedToday=trainLog[u.id]&&trainLog[u.id][todayKey()];
+            return(
+              <button key={u.id} className="member-list-item" onClick={()=>{setLoginFlow({mode:'login',user:u});setLoginPass("");setLoginError("");}}>
+                <div className="ml-avatar">
+                  {photos[u.id]?<img src={photos[u.id]} className="ml-photo" alt=""/>:<IconUser/>}
+                  {trainedToday&&<span className="ml-done-badge">✓</span>}
+                </div>
+                <div className="ml-info">
+                  <span className="ml-name">{u.name}</span>
+                  <span className="ml-routine">{hasRoutine?"Rutina asignada":"Sin rutina"}</span>
+                </div>
+                <span className="ml-arrow">›</span>
+              </button>
+            );
+          })}
+          {users.filter(u=>u.active!==false&&!u.pin).length>0&&(
+            <button className="member-list-add" onClick={()=>{setLoginFlow({mode:'register'});setLoginPass("");setLoginPass2("");setLoginUser("");setLoginError("");}}>
+              <span className="ml-add-icon">+</span>
+              <span className="ml-add-txt">Soy nuevo — crear cuenta</span>
+            </button>
           )}
         </div>
       )}
@@ -1945,11 +1979,27 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
       {confirmDelete&&(
         <div className="modal-overlay" onClick={()=>setConfirmDelete(null)}>
           <div className="modal-box" onClick={e=>e.stopPropagation()}>
-            <p>¿Seguro que querés eliminar <strong>{confirmDelete.name}</strong>?</p>
-            <div className="modal-actions">
-              <button className="btn-danger" onClick={()=>deleteUser(confirmDelete.id)}>Eliminar</button>
-              <button className="btn-ghost" onClick={()=>setConfirmDelete(null)}>Cancelar</button>
-            </div>
+            {confirmDelete.type==="resetpin"?(
+              <>
+                <p>¿Blanquear la contraseña de <strong>{confirmDelete.name}</strong>? La próxima vez que entre, va a tener que crear una contraseña nueva.</p>
+                <div className="modal-actions">
+                  <button className="btn-danger" onClick={async()=>{
+                    try{ await db.updateUser(confirmDelete.id, {pin:null}); } catch(e){ console.error(e); }
+                    setUsers(us=>us.map(x=>x.id===confirmDelete.id?{...x,pin:null}:x));
+                    setConfirmDelete(null);
+                  }}>Blanquear</button>
+                  <button className="btn-ghost" onClick={()=>setConfirmDelete(null)}>Cancelar</button>
+                </div>
+              </>
+            ):(
+              <>
+                <p>¿Seguro que querés eliminar <strong>{confirmDelete.name}</strong>?</p>
+                <div className="modal-actions">
+                  <button className="btn-danger" onClick={()=>deleteUser(confirmDelete.id)}>Eliminar</button>
+                  <button className="btn-ghost" onClick={()=>setConfirmDelete(null)}>Cancelar</button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -2151,6 +2201,16 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
                   <button className={`btn-toggle ${u.cuota!==false?"on":"off"}`} onClick={()=>toggleCuota(u.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",fontSize:12,fontWeight:700}}>
                     {u.cuota!==false?<><IconCheck/> Al día</>:<><IconX/> Debe cuota</>}
                   </button>
+                </div>
+                <div className="uc-routine" style={{justifyContent:"space-between"}}>
+                  <span className="uc-rlabel">Contraseña:</span>
+                  {u.pin?(
+                    <button style={{background:"none",border:"1px solid var(--border)",color:"#ff5c5c",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6}} onClick={()=>setConfirmDelete({id:u.id,name:u.name,type:"resetpin"})}>
+                      <IconLock/> Blanquear
+                    </button>
+                  ):(
+                    <span style={{fontSize:12,color:"var(--text3)"}}>Sin registrar todavía</span>
+                  )}
                 </div>
               </div>
             );

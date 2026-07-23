@@ -621,7 +621,6 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   },[selected?.id]);
   const [restTimer, setRestTimer] = useState(null);
   const [trainLog, setTrainLog] = useState({});
-  const [pins, setPins] = useState({});
   const [loginFlow, setLoginFlow] = useState(null);
   const autoBioTriedRef = useRef(null);
   const [loginUser, setLoginUser] = useState("");
@@ -666,7 +665,6 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
       setTrainLog(log);
     }).catch(()=>{ loadData(KEYS.log,{}).then(setTrainLog); });
   },[]);
-  useEffect(()=>{ loadData(KEYS.pins,{}).then(setPins); },[]);
 
   // Show a one-time popup when the coach posts a new novedad
   useEffect(()=>{
@@ -701,7 +699,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   useEffect(()=>{
     if(sessionRestoredRef.current) return;
     if(!deviceLoaded || !deviceUser) return;
-    if(!users.length || Object.keys(pins).length===0) return; // wait for both to actually load
+    if(!users.length) return;
     (async()=>{
       const session = await loadData('gg_session', null);
       if(session && session.userId === deviceUser.id){
@@ -709,7 +707,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
         const THREE_HOURS = 3 * 60 * 60 * 1000;
         if(elapsed < THREE_HOURS){
           const u = users.find(x=>x.id===deviceUser.id);
-          if(u && pins[u.id]){
+          if(u && u.pin){
             sessionRestoredRef.current = true;
             setSelected(u);
             if(typeof session.activeDay === 'number') setActiveDay(session.activeDay);
@@ -717,7 +715,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
         }
       }
     })();
-  },[deviceLoaded, deviceUser, users, pins]);
+  },[deviceLoaded, deviceUser, users]);
 
   // Reset done state every Sunday at 00:00
   useEffect(()=>{
@@ -948,7 +946,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   // If device is bound to a user and no one is selected, show only that user's login
   const boundUser = deviceUser ? users.find(u=>u.id===deviceUser.id) : null;
   // If bound user exists but has no PIN, treat as unbound (allow re-registration)
-  const effectiveBoundUser = boundUser && pins[boundUser.id] ? boundUser : null;
+  const effectiveBoundUser = boundUser && users.find(x=>x.id===boundUser.id)?.pin ? boundUser : null;
 
   return (
     <div className={`member-view${selected?" member-view--training":""}`}>
@@ -1014,14 +1012,14 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
             <input className="login-input" type={showLoginPass?"text":"password"} inputMode="numeric" placeholder="Contraseña (4 dígitos)" maxLength={4}
               value={loginPass} onChange={e=>{const v=e.target.value.replace(/\D/g,"").slice(0,4);setLoginPass(v);setLoginError("");}}
               autoFocus onKeyDown={e=>{if(e.key==='Enter'){
-                if(loginPass===pins[loginFlow.user.id]){ doLogin(loginFlow.user); }
+                if(loginPass===loginFlow.user.pin){ doLogin(loginFlow.user); }
                 else setLoginError("Contraseña incorrecta");
               }}}/>
             <button type="button" className="pw-eye" onClick={()=>setShowLoginPass(v=>!v)} tabIndex={-1}>{showLoginPass?<IconEyeOff/>:<IconEye/>}</button>
           </div>
           {loginError&&<p className="login-error">{loginError}</p>}
           <button className="login-btn" onClick={()=>{
-            if(loginPass===pins[loginFlow.user.id]){ doLogin(loginFlow.user); }
+            if(loginPass===loginFlow.user.pin){ doLogin(loginFlow.user); }
             else setLoginError("Contraseña incorrecta");
           }}>Entrar</button>
           <button className="login-cancel" onClick={()=>{setLoginFlow(null);setLoginPass("");setLoginError("");}}>Cancelar</button>
@@ -1041,7 +1039,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
       )}
 
       {!selected&&loginFlow&&loginFlow.mode==='register'&&(()=>{
-        const unregistered=users.filter(u=>u.active!==false&&!pins[u.id]);
+        const unregistered=users.filter(u=>u.active!==false&&!u.pin);
         return(
           <div className="login-card">
             <div className="login-title">Crear cuenta</div>
@@ -1060,15 +1058,16 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               <button type="button" className="pw-eye" onClick={()=>setShowRegPass(v=>!v)} tabIndex={-1}>{showRegPass?<IconEyeOff/>:<IconEye/>}</button>
             </div>
             {loginError&&<p className="login-error">{loginError}</p>}
-            <button className="login-btn" onClick={()=>{
+            <button className="login-btn" onClick={async()=>{
               if(!loginUser){setLoginError("Elegí tu nombre");return;}
               if(loginPass.length!==4){setLoginError("Ingresá exactamente 4 dígitos");return;}
               if(loginPass!==loginPass2){setLoginError("Las contraseñas no coinciden");return;}
               const uid=isNaN(loginUser)?loginUser:Number(loginUser);
-              const newPins={...pins,[uid]:loginPass};
-              setPins(newPins);saveData(KEYS.pins,newPins);
               const u=users.find(x=>x.id===uid);
-              doLogin(u);
+              if(u && u.pin){ setLoginError("Este alumno ya tiene una cuenta creada. Usá 'Iniciar sesión' en vez de crear una nueva."); return; }
+              try{ await db.updateUser(uid, {pin: loginPass}); } catch(e){ console.error(e); }
+              setUsers(us=>us.map(x=>x.id===uid?{...x,pin:loginPass}:x));
+              doLogin({...u, pin:loginPass});
             }}>Crear cuenta</button>
             <button className="login-cancel" onClick={()=>{setLoginFlow(null);setLoginPass("");setLoginPass2("");setLoginUser("");setLoginError("");}}>Cancelar</button>
           </div>
@@ -1136,7 +1135,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
           ) : (
             // No device binding: show full list + register
             <>
-              {users.filter(u=>u.active!==false&&pins[u.id]).map(u=>{
+              {users.filter(u=>u.active!==false&&u.pin).map(u=>{
                 const hasRoutine=u.days&&u.days.length;
                 const trainedToday=trainLog[u.id]&&trainLog[u.id][todayKey()];
                 return(
@@ -1153,7 +1152,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                   </button>
                 );
               })}
-              {users.filter(u=>u.active!==false&&!pins[u.id]).length>0&&(
+              {users.filter(u=>u.active!==false&&!u.pin).length>0&&(
                 <button className="member-list-add" onClick={()=>{setLoginFlow({mode:'register'});setLoginPass("");setLoginPass2("");setLoginUser("");setLoginError("");}}>
                   <span className="ml-add-icon">+</span>
                   <span className="ml-add-txt">Soy nuevo — crear cuenta</span>
@@ -1377,12 +1376,12 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                   <button type="button" className="pw-eye" onClick={()=>setShowPwNew(v=>!v)} tabIndex={-1}>{showPwNew?<IconEyeOff/>:<IconEye/>}</button>
                 </div>
                 {settingsMsg&&<p style={{textAlign:"center",fontSize:13,color:settingsMsg.startsWith("✓")?"var(--gold)":"#ff5c5c",marginBottom:10}}>{settingsMsg}</p>}
-                <button className="login-btn" onClick={()=>{
-                  if(newPass!==pins[selected.id]){setSettingsMsg("Contraseña anterior incorrecta");return;}
+                <button className="login-btn" onClick={async()=>{
+                  if(newPass!==selected.pin){setSettingsMsg("Contraseña anterior incorrecta");return;}
                   if(newPass2.length!==4){setSettingsMsg("La nueva contraseña debe tener 4 dígitos");return;}
                   if(newPass2!==newPass3){setSettingsMsg("Las contraseñas no coinciden");return;}
-                  const newPins={...pins,[selected.id]:newPass2};
-                  setPins(newPins);saveData(KEYS.pins,newPins);
+                  try{ await db.updateUser(selected.id, {pin: newPass2}); } catch(e){ console.error(e); }
+                  setUsers(us=>us.map(x=>x.id===selected.id?{...x,pin:newPass2}:x));
                   setNewPass("");setNewPass2("");setNewPass3("");
                   setSettingsMsg("✓ Contraseña actualizada");
                   setTimeout(()=>setSettingsView("main"),1200);
@@ -1626,7 +1625,7 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
               byId.set(r.id, {
                 id:r.id, name:r.name, active:r.active, cuota:r.cuota,
                 photo:byId.get(r.id)?.photo||null, startDate:r.start_date||byId.get(r.id)?.startDate||null,
-                days:r.days, driveFileId:r.drive_file_id
+                days:r.days, driveFileId:r.drive_file_id, pin:r.pin!==undefined?r.pin:byId.get(r.id)?.pin
               });
             });
             return Array.from(byId.values());
@@ -2316,7 +2315,7 @@ function AppInner() {
         ]);
         setUsers(supaUsers?.length ? supaUsers.map(u=>({
           id: u.id, name: u.name, active: u.active, cuota: u.cuota,
-          photo: u.photo, startDate: u.start_date, days: u.days||[], driveFileId: u.drive_file_id
+          photo: u.photo, startDate: u.start_date, days: u.days||[], driveFileId: u.drive_file_id, pin: u.pin
         })) : defaultUsers);
         setGymInfo(supaGymInfo || {});
       } catch(e) {

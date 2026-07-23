@@ -8,8 +8,8 @@ const DRIVE_FOLDER_ID = "1wih6SGj2tZ9pTQJZzg19KjAR9w-5cgpv";
 // Netlify (https://tu-app.netlify.app) en "Orígenes autorizados de JavaScript".
 const GOOGLE_CLIENT_ID = "979691772186-qgrn7dh0v49t5bq1it0u690gcr9pahs3.apps.googleusercontent.com";
 function driveFilesListUrl(){
-  const q = `'${DRIVE_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
-  return `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+  const q = `'${DRIVE_FOLDER_ID}' in parents and (mimeType='application/vnd.google-apps.spreadsheet' or mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') and trashed=false`;
+  return `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime,mimeType)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true`;
 }
 const GYM_LAT = -34.730867;
 const GYM_LNG = -58.292175;
@@ -1520,45 +1520,83 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
       if(!files.length){ setSyncMsg('No se encontraron planillas en la carpeta.'); setSyncing(false); return; }
 
       const failed=[];
-      const CONCURRENCY=15; // just Sheets API reads here — cheap, so go wider
+      const CONCURRENCY=10; // just Sheets API reads here — cheap, but leave headroom for Google's rate limits
       let doneCount=0;
       const parsedResults=[]; // {file, routine} for successfully parsed sheets
-      for(let b=0;b<files.length;b+=CONCURRENCY){
-        const batch=files.slice(b,b+CONCURRENCY);
-        await Promise.all(batch.map(async(file)=>{
-          try{
-            const sheetResp = await fetch(
-              `https://sheets.googleapis.com/v4/spreadsheets/${file.id}?includeGridData=true&fields=sheets(data(rowData(values(formattedValue))),merges)`,
-              {headers:{Authorization:`Bearer ${token}`}}
-            );
-            const sheetJson = await sheetResp.json();
-            const sheet = sheetJson.sheets && sheetJson.sheets[0];
-            if(!sheet){ failed.push(file.name); return; }
-            const grid = buildGridFromSheet(sheet);
-            const routine = parseRoutineFromGrid(file.name, grid);
-            if(!routine.days.length){ failed.push(`${file.name} (sin días detectados)`); return; }
-            parsedResults.push({file, routine});
-          } catch(e){
-            console.error(e);
-            failed.push(file.name);
-          } finally {
-            doneCount++;
-            setSyncMsg(`Leyendo planillas... ${doneCount}/${files.length}`);
-          }
-        }));
+
+      const fetchAndParse = async(file)=>{
+        if(file.mimeType==='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'){
+          return {ok:false, reason:"es un Excel (.xlsx), convertilo a Google Sheets para poder leerlo"};
+        }
+        const sheetResp = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${file.id}?includeGridData=true&fields=sheets(data(rowData(values(formattedValue))),merges)`,
+          {headers:{Authorization:`Bearer ${token}`}}
+        );
+        if(sheetResp.status===429 || sheetResp.status>=500){
+          throw Object.assign(new Error(`HTTP ${sheetResp.status}`), {retryable:true});
+        }
+        const sheetJson = await sheetResp.json();
+        if(sheetJson.error){
+          throw Object.assign(new Error(sheetJson.error.message||"Error de Sheets API"), {retryable:sheetJson.error.code===429});
+        }
+        const sheet = sheetJson.sheets && sheetJson.sheets[0];
+        if(!sheet) return {ok:false, reason:null};
+        const grid = buildGridFromSheet(sheet);
+        const routine = parseRoutineFromGrid(file.name, grid);
+        if(!routine.days.length) return {ok:false, reason:"sin días detectados"};
+        return {ok:true, routine};
+      };
+
+      let pending = files.slice();
+      for(let attempt=1; attempt<=3 && pending.length; attempt++){
+        if(attempt>1){
+          setSyncMsg(`Reintentando ${pending.length} planilla(s)...`);
+          await new Promise(r=>setTimeout(r, 2000*attempt)); // back off a bit before retrying
+        }
+        const stillPending=[];
+        for(let b=0;b<pending.length;b+=CONCURRENCY){
+          const batch=pending.slice(b,b+CONCURRENCY);
+          await Promise.all(batch.map(async(file)=>{
+            try{
+              const result = await fetchAndParse(file);
+              if(result.ok){
+                parsedResults.push({file, routine:result.routine});
+              } else if(attempt===3 || !result.reason){
+                // non-retryable outcome, or we're out of attempts
+                failed.push(result.reason?`${file.name} (${result.reason})`:file.name);
+              } else {
+                failed.push(`${file.name} (${result.reason})`); // e.g. "sin días detectados" — retrying won't fix content issues, keep as final
+              }
+            } catch(e){
+              if(e.retryable && attempt<3){
+                stillPending.push(file);
+              } else {
+                console.error(e);
+                failed.push(file.name);
+              }
+            } finally {
+              doneCount++;
+              setSyncMsg(`Leyendo planillas... ${Math.min(doneCount,files.length)}/${files.length}`);
+            }
+          }));
+        }
+        pending = stillPending;
       }
 
-      // Build one single bulk upsert instead of one request per alumno
+      // Build one single bulk upsert instead of one request per alumno.
+      // Every row must have the SAME set of columns or PostgREST silently
+      // rejects the whole batch — so we always include id/name/active/cuota,
+      // generating a client-side id for brand-new alumnos instead of omitting it.
       setSyncMsg('Guardando cambios...');
       let createdCount=0, updatedCount=0;
       const rows=[];
       parsedResults.forEach(({file,routine})=>{
         const matchedUser = users.find(u=>u.name.trim().toLowerCase()===file.name.trim().toLowerCase());
         if(matchedUser){
-          rows.push({id:matchedUser.id, days:routine.days, drive_file_id:file.id});
+          rows.push({id:matchedUser.id, name:matchedUser.name, active:matchedUser.active, cuota:matchedUser.cuota, days:routine.days, drive_file_id:file.id});
           updatedCount++;
         } else {
-          rows.push({name:routine.name.trim(), active:true, cuota:true, days:routine.days, drive_file_id:file.id});
+          rows.push({id:crypto.randomUUID(), name:routine.name.trim(), active:true, cuota:true, days:routine.days, drive_file_id:file.id});
           createdCount++;
         }
       });
@@ -1566,9 +1604,12 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
       if(rows.length){
         try{
           const saved = await db.bulkUpsertUsers(rows);
+          if(!Array.isArray(saved) || saved.length !== rows.length){
+            throw new Error(`La base devolvió ${Array.isArray(saved)?saved.length:0} de ${rows.length} filas esperadas`);
+          }
           setUsers(us=>{
             const byId=new Map(us.map(u=>[u.id,u]));
-            (saved||[]).forEach(r=>{
+            saved.forEach(r=>{
               byId.set(r.id, {
                 id:r.id, name:r.name, active:r.active, cuota:r.cuota,
                 photo:byId.get(r.id)?.photo||null, startDate:r.start_date||byId.get(r.id)?.startDate||null,
@@ -1579,7 +1620,7 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
           });
         } catch(e){
           console.error(e);
-          failed.push(`Error al guardar en la base (${rows.length} alumnos afectados)`);
+          failed.push(`⚠️ No se guardó nada en la base (${e.message||e})`);
           createdCount=0; updatedCount=0;
         }
       }

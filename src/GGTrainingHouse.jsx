@@ -1603,9 +1603,22 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
 
       if(rows.length){
         try{
-          const saved = await db.bulkUpsertUsers(rows);
+          const upsertResp = await fetch(`${SUPA_URL}/rest/v1/users?on_conflict=id`, {
+            method:'POST',
+            headers:{
+              apikey: SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}`, 'Content-Type':'application/json',
+              Prefer:'resolution=merge-duplicates,return=representation'
+            },
+            body: JSON.stringify(rows)
+          });
+          const rawText = await upsertResp.text();
+          if(!upsertResp.ok){
+            throw new Error(`HTTP ${upsertResp.status}: ${rawText.slice(0,300)}`);
+          }
+          let saved;
+          try { saved = JSON.parse(rawText); } catch(e){ throw new Error(`Respuesta no-JSON: ${rawText.slice(0,300)}`); }
           if(!Array.isArray(saved) || saved.length !== rows.length){
-            throw new Error(`La base devolvió ${Array.isArray(saved)?saved.length:0} de ${rows.length} filas esperadas`);
+            throw new Error(`La base devolvió ${Array.isArray(saved)?saved.length:0} de ${rows.length} filas esperadas. Respuesta: ${rawText.slice(0,300)}`);
           }
           setUsers(us=>{
             const byId=new Map(us.map(u=>[u.id,u]));

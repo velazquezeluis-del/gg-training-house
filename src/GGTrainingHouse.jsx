@@ -447,7 +447,7 @@ const DRIVE_SECTION_HEADERS = new Set([
   "MOVILIDAD","ACTIVACION","ACTIVACIÓN","CORE Y ACTIVACION","CORE Y ACTIVACIÓN",
   "CORE + ACTIVACION","CORE + ACTIVACIÓN","FUERZA ESTRUCTURA","FUERZA ESPECÍFICA",
   "ACCESORIOS","CIRCUITO FINALIZADOR","CIRCUITO 1","CIRCUITO 2","BLOQUE FINALIZADOR",
-  "ACONDICIONAMIENTO FINAL","CARRERAS POR TIEMPO","CALENTAMIENTO"
+  "ACONDICIONAMIENTO FINAL","CARRERAS POR TIEMPO","CALENTAMIENTO","DESARROLLO","POTENCIA"
 ]);
 const DRIVE_SKIP_PREFIXES = ["PAUSA","X2 VUELTAS","X3 VUELTAS","X4 VUELTAS","FORMATO","INTENSIDAD/CARGA","OBSERVACIONES","SIN PAUSA"];
 const DRIVE_WEEKDAYS = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
@@ -486,10 +486,18 @@ function driveParseDayBlocks(rows){
     if(!label) continue;
     const upper=label.toUpperCase();
     const rest=cells.slice(3);
-    if(DRIVE_SECTION_HEADERS.has(upper) || /^BLOQUE\s*\d*$/.test(upper)){
+    const looksLikeHeaderWithWeeks = !!(cells[3] && /^SEMANA\s*1/i.test(cells[3].trim()));
+    const looksLikeBlankHeader = rest.every(c=>!c || !c.trim());
+    const isSkippable = DRIVE_SKIP_PREFIXES.some(p=>upper.startsWith(p)) || upper.startsWith("INTENSIDAD/CARGA");
+    if(DRIVE_SECTION_HEADERS.has(upper) || /^BLOQUE\s*\d*$/.test(upper) || (!isSkippable && (looksLikeHeaderWithWeeks || looksLikeBlankHeader))){
+      // Recognized name, OR an unrecognized header we've never seen before —
+      // exercise rows always have reps/data in the following columns, so a
+      // header-only row (blank, or carrying the "SEMANA 1..." week labels)
+      // is almost certainly a new section name, not something to merge
+      // silently into whatever block came before it.
       curBlock={name:driveTitleCase(label), type:(upper.includes("MOVILIDAD")||upper.includes("CALENTAMIENTO"))?"warmup":"block", exercises:[]};
       blocks.push(curBlock);
-      hasWeekCols = !!(cells[3] && cells[3].toUpperCase().startsWith("SEMANA 1"));
+      hasWeekCols = looksLikeHeaderWithWeeks;
       groupStart=0;
       continue;
     }
@@ -612,11 +620,22 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   };
   useEffect(()=>{
     if(selected){
-      db.getProgress(selected.id, getSundayKey()).then(rows=>{
-        const d={};
-        (rows||[]).forEach(r=>{ d[`${r.day_index}-${r.block_index}`]=true; });
-        setDone(d);
-      }).catch(e=>{ console.error('No se pudo cargar el progreso de la nube', e); setDone({}); });
+      (async()=>{
+        try{
+          const resp = await fetch(`${SUPA_URL}/rest/v1/progress?user_id=eq.${selected.id}&week_key=eq.${getSundayKey()}&select=day_index,block_index`, {
+            headers:{ apikey: SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}` }
+          });
+          const text = await resp.text();
+          if(!resp.ok){ console.error('No se pudo cargar el progreso:', resp.status, text); setDone({}); return; }
+          const rows = JSON.parse(text);
+          const d={};
+          (rows||[]).forEach(r=>{ d[`${r.day_index}-${r.block_index}`]=true; });
+          setDone(d);
+        } catch(e){
+          console.error('No se pudo cargar el progreso de la nube', e);
+          setDone({});
+        }
+      })();
     }
   },[selected?.id]);
   const [restTimer, setRestTimer] = useState(null);
@@ -624,6 +643,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const [loginFlow, setLoginFlow] = useState(null);
   const autoBioTriedRef = useRef(null);
   const [loginUser, setLoginUser] = useState("");
+  const [loginUsername, setLoginUsername] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginPass2, setLoginPass2] = useState("");
   const [showLoginPass, setShowLoginPass] = useState(false);
@@ -937,8 +957,28 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const completBlock=(dayIdx,blockIdx,blockRest)=>{
     setDone(prev=>({...prev,[`${dayIdx}-${blockIdx}`]:true}));
     if(selected){
-      db.saveProgress({user_id:selected.id, week_key:getSundayKey(), day_index:dayIdx, block_index:blockIdx})
-        .catch(e=>console.error('No se pudo guardar el progreso en la nube', e));
+      (async()=>{
+        try{
+          const resp = await fetch(`${SUPA_URL}/rest/v1/progress`, {
+            method:'POST',
+            headers:{
+              apikey: SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}`, 'Content-Type':'application/json',
+              Prefer:'resolution=merge-duplicates,return=representation'
+            },
+            body: JSON.stringify({user_id:selected.id, week_key:getSundayKey(), day_index:dayIdx, block_index:blockIdx})
+          });
+          const text = await resp.text();
+          if(!resp.ok){
+            console.error('No se pudo guardar el progreso:', resp.status, text);
+            setGeoError('⚠️ No se pudo guardar tu progreso en la nube. Revisá tu conexión.');
+            setTimeout(()=>setGeoError(""),6000);
+          }
+        } catch(e){
+          console.error('No se pudo guardar el progreso en la nube', e);
+          setGeoError('⚠️ No se pudo guardar tu progreso en la nube. Revisá tu conexión.');
+          setTimeout(()=>setGeoError(""),6000);
+        }
+      })();
     }
     startRest(blockRest);
   };
@@ -1047,7 +1087,8 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               <option value="">Elegí tu nombre</option>
               {unregistered.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
-            <div className="pw-wrap">
+            <input className="login-input" placeholder="Elegí un usuario" value={loginUsername} onChange={e=>{setLoginUsername(e.target.value.replace(/\s/g,""));setLoginError("");}} style={{marginTop:10}}/>
+            <div className="pw-wrap" style={{marginTop:10}}>
               <input className="login-input" type={showRegPass?"text":"password"} inputMode="numeric" placeholder="Elegí 4 dígitos" maxLength={4}
                 value={loginPass} onChange={e=>{setLoginPass(e.target.value.replace(/\D/g,"").slice(0,4));setLoginError("");}}/>
               <button type="button" className="pw-eye" onClick={()=>setShowRegPass(v=>!v)} tabIndex={-1}>{showRegPass?<IconEyeOff/>:<IconEye/>}</button>
@@ -1060,19 +1101,46 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
             {loginError&&<p className="login-error">{loginError}</p>}
             <button className="login-btn" onClick={async()=>{
               if(!loginUser){setLoginError("Elegí tu nombre");return;}
+              const uname=loginUsername.trim().toLowerCase();
+              if(!uname){setLoginError("Elegí un usuario");return;}
+              if(users.some(x=>x.username && x.username.toLowerCase()===uname)){setLoginError("Ese usuario ya está en uso, elegí otro");return;}
               if(loginPass.length!==4){setLoginError("Ingresá exactamente 4 dígitos");return;}
               if(loginPass!==loginPass2){setLoginError("Las contraseñas no coinciden");return;}
               const uid=isNaN(loginUser)?loginUser:Number(loginUser);
               const u=users.find(x=>x.id===uid);
               if(u && u.pin){ setLoginError("Este alumno ya tiene una cuenta creada. Usá 'Iniciar sesión' en vez de crear una nueva."); return; }
-              try{ await db.updateUser(uid, {pin: loginPass}); } catch(e){ console.error(e); }
-              setUsers(us=>us.map(x=>x.id===uid?{...x,pin:loginPass}:x));
-              doLogin({...u, pin:loginPass});
+              try{ await db.updateUser(uid, {pin: loginPass, username: uname}); } catch(e){ console.error(e); }
+              setUsers(us=>us.map(x=>x.id===uid?{...x,pin:loginPass,username:uname}:x));
+              doLogin({...u, pin:loginPass, username:uname});
             }}>Crear cuenta</button>
-            <button className="login-cancel" onClick={()=>{setLoginFlow(null);setLoginPass("");setLoginPass2("");setLoginUser("");setLoginError("");}}>Cancelar</button>
+            <button className="login-cancel" onClick={()=>{setLoginFlow(null);setLoginPass("");setLoginPass2("");setLoginUser("");setLoginUsername("");setLoginError("");}}>Cancelar</button>
           </div>
         );
       })()}
+
+      {!selected&&loginFlow&&loginFlow.mode==='usernameLogin'&&(
+        <div className="login-card">
+          <div className="login-title">Iniciar sesión</div>
+          <input className="login-input" placeholder="Usuario" value={loginUsername} onChange={e=>{setLoginUsername(e.target.value.replace(/\s/g,""));setLoginError("");}}/>
+          <div className="pw-wrap" style={{marginTop:10}}>
+            <input className="login-input" type={showLoginPass?"text":"password"} inputMode="numeric" placeholder="Contraseña (4 dígitos)" maxLength={4}
+              value={loginPass} onChange={e=>{setLoginPass(e.target.value.replace(/\D/g,"").slice(0,4));setLoginError("");}}
+              onKeyDown={e=>{if(e.key==='Enter') document.getElementById('username-login-btn')?.click();}}/>
+            <button type="button" className="pw-eye" onClick={()=>setShowLoginPass(v=>!v)} tabIndex={-1}>{showLoginPass?<IconEyeOff/>:<IconEye/>}</button>
+          </div>
+          {loginError&&<p className="login-error">{loginError}</p>}
+          <button id="username-login-btn" className="login-btn" onClick={()=>{
+            const uname=loginUsername.trim().toLowerCase();
+            const u=users.find(x=>x.username && x.username.toLowerCase()===uname);
+            if(!u || u.pin!==loginPass){ setLoginError("Usuario o contraseña incorrectos"); return; }
+            doLogin(u);
+          }}>Iniciar sesión</button>
+          <button style={{background:"none",border:"none",color:"var(--text3)",fontSize:12,cursor:"pointer",padding:0,marginTop:10}} onClick={()=>{setLoginFlow({mode:'pickOther'});setLoginUsername("");setLoginError("");}}>
+            No sé mi usuario — buscar mi nombre en la lista
+          </button>
+          <button className="login-cancel" onClick={()=>{setLoginFlow(null);setLoginPass("");setLoginUsername("");setLoginError("");}}>Cancelar</button>
+        </div>
+      )}
 
       {!selected&&!loginFlow&&(()=>{
         // Top 5 leaderboard
@@ -1136,33 +1204,20 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               </div>
             </>
           ) : (
-            // No device binding: show full list + register
-            <>
-              {users.filter(u=>u.active!==false&&u.pin).map(u=>{
-                const hasRoutine=u.days&&u.days.length;
-                const trainedToday=trainLog[u.id]&&trainLog[u.id][todayKey()];
-                return(
-                  <button key={u.id} className="member-list-item" onClick={()=>{setLoginFlow({mode:'login',user:u});setLoginPass("");setLoginError("");}}>
-                    <div className="ml-avatar">
-                      {photos[u.id]?<img src={photos[u.id]} className="ml-photo" alt=""/>:<IconUser/>}
-                      {trainedToday&&<span className="ml-done-badge">✓</span>}
-                    </div>
-                    <div className="ml-info">
-                      <span className="ml-name">{u.name}</span>
-                      <span className="ml-routine">{hasRoutine?"Rutina asignada":"Sin rutina"}</span>
-                    </div>
-                    <span className="ml-arrow">›</span>
-                  </button>
-                );
-              })}
+            // No device binding: lead with username+password login
+            <div style={{padding:"24px 20px",display:"flex",flexDirection:"column",gap:10,alignItems:"stretch"}}>
+              <button className="login-btn" onClick={()=>{setLoginFlow({mode:'usernameLogin'});setLoginUsername("");setLoginPass("");setLoginError("");}}>Iniciar sesión</button>
+              <button style={{background:"none",border:"none",color:"var(--text3)",fontSize:12,cursor:"pointer",padding:4}} onClick={()=>setLoginFlow({mode:'pickOther'})}>
+                No sé mi usuario — buscar mi nombre en la lista
+              </button>
               {users.filter(u=>u.active!==false&&!u.pin).length>0&&(
-                <button className="member-list-add" onClick={()=>{setLoginFlow({mode:'register'});setLoginPass("");setLoginPass2("");setLoginUser("");setLoginError("");}}>
+                <button className="member-list-add" style={{borderTop:"1px dashed var(--border)",paddingTop:14,marginTop:6}} onClick={()=>{setLoginFlow({mode:'register'});setLoginPass("");setLoginPass2("");setLoginUser("");setLoginUsername("");setLoginError("");}}>
                   <span className="ml-add-icon">+</span>
                   <span className="ml-add-txt">Soy nuevo — crear cuenta</span>
                 </button>
               )}
               {users.filter(u=>u.active!==false).length===0&&(<p className="ml-empty">No hay alumnos activos</p>)}
-            </>
+            </div>
           )}
         </div>
       )}
@@ -2375,7 +2430,7 @@ function AppInner() {
         ]);
         setUsers(supaUsers?.length ? supaUsers.map(u=>({
           id: u.id, name: u.name, active: u.active, cuota: u.cuota,
-          photo: u.photo, startDate: u.start_date, days: u.days||[], driveFileId: u.drive_file_id, pin: u.pin
+          photo: u.photo, startDate: u.start_date, days: u.days||[], driveFileId: u.drive_file_id, pin: u.pin, username: u.username
         })) : defaultUsers);
         setGymInfo(supaGymInfo || {});
       } catch(e) {

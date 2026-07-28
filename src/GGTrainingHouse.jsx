@@ -112,6 +112,8 @@ function GGApp() {
  .day-tab:hover:not(.active){color:var(--text2)}
  .day-tab.tab-done{color:var(--green)}
  .day-tab.tab-done.active{border-bottom-color:var(--green)}
+ .day-tab.day-tab-locked{opacity:.4;cursor:not-allowed}
+ .day-tab.day-tab-locked:hover{color:var(--text3)}
  .day-complete-banner{margin:12px 12px 0;padding:12px 16px;background:rgba(62,207,142,0.12);border:1px solid var(--green);border-radius:10px;color:var(--green);font-weight:600;font-size:14px;text-align:center;animation:slideUp .3s ease}
  .blocks-list{padding:12px;display:flex;flex-direction:column;gap:12px}
  .member-block{border-radius:12px;border:1px solid var(--border);overflow:hidden;transition:border-color .3s}
@@ -452,6 +454,26 @@ const DRIVE_SECTION_HEADERS = new Set([
 const DRIVE_SKIP_PREFIXES = ["PAUSA","X2 VUELTAS","X3 VUELTAS","X4 VUELTAS","FORMATO","INTENSIDAD/CARGA","OBSERVACIONES","SIN PAUSA"];
 const DRIVE_WEEKDAYS = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
 
+// Coaches write pause/rest durations inconsistently in the sheet: "PAUSA 1'",
+// "PAUSA 1:30", "PAUSA 90\"", "PAUSA 1m30s", or just "PAUSA 2" (bare number,
+// assumed minutes). This normalizes any of those into seconds. Returns null
+// if nothing usable is found, so callers can fall back to a sane default.
+function parsePauseSeconds(text){
+  const body=(text||"").replace(/PAUSA/i,"").trim();
+  if(!body) return null;
+  let m=body.match(/(\d+)\s*:\s*(\d+)/);
+  if(m) return parseInt(m[1],10)*60+parseInt(m[2],10);
+  let mins=0, secs=0, found=false;
+  m=body.match(/(\d+)\s*(?:m|')/i);
+  if(m){ mins=parseInt(m[1],10); found=true; }
+  m=body.match(/(\d+)\s*(?:s|")/i);
+  if(m){ secs=parseInt(m[1],10); found=true; }
+  if(found) return mins*60+secs;
+  m=body.match(/^(\d+)$/);
+  if(m) return parseInt(m[1],10)*60;
+  return null;
+}
+
 function driveTitleCase(s){
   return s.toLowerCase().replace(/(^|\s|-)([a-záéíóúñ])/g,(m,sep,ch)=>sep+ch.toUpperCase());
 }
@@ -487,14 +509,23 @@ function driveParseDayBlocks(rows){
     const upper=label.toUpperCase();
     const rest=cells.slice(3);
     const looksLikeHeaderWithWeeks = !!(cells[3] && /^SEMANA\s*1/i.test(cells[3].trim()));
+    // Some coaches label sub-blocks with a free-form name ("Levantamiento
+    // Bloque Uno", "Fuerza Bloque Dos"...) that we can't recognize by text,
+    // but the row right under a real section title always has the column
+    // headers themselves (REPS/SERIES/KG.../VUELTAS/TIEMPO) instead of actual
+    // exercise data — that's the reliable signal that this is a new block,
+    // not an exercise to record data for.
+    const looksLikeColumnHeaderRow = !!(cells[3] && /^(REPS|SERIES|VUELTAS|TIEMPO|KG\/?CM)$/i.test(cells[3].trim()));
     const looksLikeBlankHeader = rest.every(c=>!c || !c.trim());
     const isSkippable = DRIVE_SKIP_PREFIXES.some(p=>upper.startsWith(p)) || upper.startsWith("INTENSIDAD/CARGA");
-    if(DRIVE_SECTION_HEADERS.has(upper) || /^BLOQUE\s*\d*$/.test(upper) || (!isSkippable && (looksLikeHeaderWithWeeks || looksLikeBlankHeader))){
+    if(DRIVE_SECTION_HEADERS.has(upper) || /^BLOQUE\s*\d*$/.test(upper) || (!isSkippable && (looksLikeHeaderWithWeeks || looksLikeColumnHeaderRow || looksLikeBlankHeader))){
       // Recognized name, OR an unrecognized header we've never seen before —
       // exercise rows always have reps/data in the following columns, so a
-      // header-only row (blank, or carrying the "SEMANA 1..." week labels)
-      // is almost certainly a new section name, not something to merge
-      // silently into whatever block came before it.
+      // header-only row (blank, or carrying the "SEMANA 1..." week labels,
+      // or the literal column headers like "REPS/SERIES/KG") is almost
+      // certainly a new section name, not something to merge silently into
+      // whatever block came before it.
+      if(curBlock && curBlock.exercises.length===0) blocks.pop(); // drop empty placeholder left by a category-only row (e.g. "Desarrollo")
       curBlock={name:driveTitleCase(label), type:(upper.includes("MOVILIDAD")||upper.includes("CALENTAMIENTO"))?"warmup":"block", exercises:[]};
       blocks.push(curBlock);
       hasWeekCols = looksLikeHeaderWithWeeks;
@@ -518,7 +549,11 @@ function driveParseDayBlocks(rows){
     if(DRIVE_SKIP_PREFIXES.some(p=>upper.startsWith(p))){
       if(curBlock){
         let tag=null, text="";
-        if(upper.startsWith("PAUSA")){ tag="⏱ Pausa"; text=label; }
+        if(upper.startsWith("PAUSA")){
+          tag="⏱ Pausa"; text=label;
+          const secs=parsePauseSeconds(label);
+          if(secs!=null) curBlock.restSeconds=secs; // the "descanso entre bloques" popup uses this
+        }
         else if(upper.startsWith("OBSERVACIONES")){ tag="📋 Nota"; text=rest.find(c=>c&&c.trim())||""; }
         else if(upper.startsWith("FORMATO")){ tag="🔁 Formato"; text=rest.find(c=>c&&c.trim())||""; }
         if(tag&&text){
@@ -621,19 +656,33 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   useEffect(()=>{
     if(selected){
       (async()=>{
-        try{
-          const resp = await fetch(`${SUPA_URL}/rest/v1/progress?user_id=eq.${selected.id}&week_key=eq.${getSundayKey()}&select=day_index,block_index`, {
-            headers:{ apikey: SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}` }
-          });
-          const text = await resp.text();
-          if(!resp.ok){ console.error('No se pudo cargar el progreso:', resp.status, text); setDone({}); return; }
-          const rows = JSON.parse(text);
-          const d={};
-          (rows||[]).forEach(r=>{ d[`${r.day_index}-${r.block_index}`]=true; });
-          setDone(d);
-        } catch(e){
-          console.error('No se pudo cargar el progreso de la nube', e);
-          setDone({});
+        for(let attempt=1; attempt<=3; attempt++){
+          try{
+            const resp = await fetch(`${SUPA_URL}/rest/v1/progress?user_id=eq.${selected.id}&week_key=eq.${getSundayKey()}&select=day_index,block_index`, {
+              headers:{ apikey: SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}` }
+            });
+            const text = await resp.text();
+            if(!resp.ok){
+              if((resp.status===429||resp.status>=500) && attempt<3){
+                await new Promise(r=>setTimeout(r, 1000*attempt));
+                continue;
+              }
+              console.error('No se pudo cargar el progreso:', resp.status, text);
+              setGeoError('⚠️ No se pudo cargar tu progreso. Probá salir y volver a entrar.');
+              setTimeout(()=>setGeoError(""),6000);
+              return; // keep whatever "done" already has instead of wiping it
+            }
+            const rows = JSON.parse(text);
+            const d={};
+            (rows||[]).forEach(r=>{ d[`${r.day_index}-${r.block_index}`]=true; });
+            setDone(d);
+            return;
+          } catch(e){
+            if(attempt<3){ await new Promise(r=>setTimeout(r, 1000*attempt)); continue; }
+            console.error('No se pudo cargar el progreso de la nube', e);
+            setGeoError('⚠️ No se pudo cargar tu progreso. Probá salir y volver a entrar.');
+            setTimeout(()=>setGeoError(""),6000);
+          }
         }
       })();
     }
@@ -792,10 +841,12 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     return ()=>clearInterval(restRef.current);
   },[restTimer?.running]);
 
-  const startRest=(restStr)=>{
+  const startRest=(restVal)=>{
     let secs=60;
-    if(restStr&&restStr!=="-"){
-      const mm=restStr.match(/(\d+)m/), sm=restStr.match(/(\d+)s/);
+    if(typeof restVal==="number"){
+      secs=restVal>=0?restVal:60;
+    } else if(restVal&&restVal!=="-"){
+      const mm=restVal.match(/(\d+)m/), sm=restVal.match(/(\d+)s/);
       secs=(mm?parseInt(mm[1])*60:0)+(sm?parseInt(sm[1]):0)||60;
     }
     clearInterval(restRef.current);
@@ -913,7 +964,25 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     ?routine.days[di].blocks.every((_,bi)=>isBlockDone(di,bi))
     :false;
 
+  // A day is locked until every day before it is fully completed. This only
+  // reads from `done` (already loaded from Supabase per week) — it never
+  // clears or touches progress itself, so a previously-completed day stays
+  // completed and doesn't need to be redone.
+  const dayLocked=(di)=>{
+    for(let p=0;p<di;p++){ if(!dayDoneCheck(p)) return true; }
+    return false;
+  };
+
   const allWeekDone=routine?routine.days.every((_,di)=>dayDoneCheck(di)):false;
+
+  useEffect(()=>{
+    if(!routine) return;
+    if(dayLocked(activeDay)){
+      let firstOpen=0;
+      while(firstOpen<routine.days.length-1 && dayDoneCheck(firstOpen)) firstOpen++;
+      setActiveDay(firstOpen);
+    }
+  },[done, routine, activeDay]);
 
   const nextSundayStr=(()=>{
     const now=new Date();
@@ -958,25 +1027,33 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     setDone(prev=>({...prev,[`${dayIdx}-${blockIdx}`]:true}));
     if(selected){
       (async()=>{
-        try{
-          const resp = await fetch(`${SUPA_URL}/rest/v1/progress`, {
-            method:'POST',
-            headers:{
-              apikey: SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}`, 'Content-Type':'application/json',
-              Prefer:'resolution=merge-duplicates,return=representation'
-            },
-            body: JSON.stringify({user_id:selected.id, week_key:getSundayKey(), day_index:dayIdx, block_index:blockIdx})
-          });
-          const text = await resp.text();
-          if(!resp.ok){
-            console.error('No se pudo guardar el progreso:', resp.status, text);
+        for(let attempt=1; attempt<=3; attempt++){
+          try{
+            const resp = await fetch(`${SUPA_URL}/rest/v1/progress`, {
+              method:'POST',
+              headers:{
+                apikey: SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}`, 'Content-Type':'application/json',
+                Prefer:'resolution=merge-duplicates,return=representation'
+              },
+              body: JSON.stringify({user_id:selected.id, week_key:getSundayKey(), day_index:dayIdx, block_index:blockIdx})
+            });
+            const text = await resp.text();
+            if(!resp.ok){
+              if((resp.status===429||resp.status>=500) && attempt<3){
+                await new Promise(r=>setTimeout(r, 1000*attempt));
+                continue;
+              }
+              console.error('No se pudo guardar el progreso:', resp.status, text);
+              setGeoError('⚠️ No se pudo guardar tu progreso en la nube. Revisá tu conexión.');
+              setTimeout(()=>setGeoError(""),6000);
+            }
+            return;
+          } catch(e){
+            if(attempt<3){ await new Promise(r=>setTimeout(r, 1000*attempt)); continue; }
+            console.error('No se pudo guardar el progreso en la nube', e);
             setGeoError('⚠️ No se pudo guardar tu progreso en la nube. Revisá tu conexión.');
             setTimeout(()=>setGeoError(""),6000);
           }
-        } catch(e){
-          console.error('No se pudo guardar el progreso en la nube', e);
-          setGeoError('⚠️ No se pudo guardar tu progreso en la nube. Revisá tu conexión.');
-          setTimeout(()=>setGeoError(""),6000);
         }
       })();
     }
@@ -1269,11 +1346,16 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
           ):(
             <>
               <div className="day-tabs">
-                {routine.days.map((d,i)=>(
-                  <button key={i} className={`day-tab ${activeDay===i?"active":""} ${dayDoneCheck(i)?"tab-done":""}`} onClick={()=>setActiveDay(i)}>
-                    DÍA {i+1}{dayDoneCheck(i)?" ✓":""}
-                  </button>
-                ))}
+                {routine.days.map((d,i)=>{
+                  const locked=dayLocked(i);
+                  return (
+                    <button key={i} className={`day-tab ${activeDay===i?"active":""} ${dayDoneCheck(i)?"tab-done":""} ${locked?"day-tab-locked":""}`}
+                      disabled={locked}
+                      onClick={()=>{ if(!locked) setActiveDay(i); }}>
+                      {locked&&<IconLock/>} DÍA {i+1}{dayDoneCheck(i)?" ✓":""}
+                    </button>
+                  );
+                })}
               </div>
               {allWeekDone?(
                 <div className="day-complete-banner" style={{background:"rgba(245,197,24,0.1)",borderColor:"var(--gold)",color:"var(--gold)"}}>
@@ -1290,7 +1372,9 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                   const prevBlockDone=bi===0||!!done[`${activeDay}-${bi-1}`];
                   const locked=!prevBlockDone;
                   // get rest from first exercise with a rest value
-                  const blockRest=block.exercises.find(e=>e.rest&&e.rest!=="-")?.rest||"90s";
+                  // Use the pause value the coach actually wrote for this block ("PAUSA 1'", "PAUSA 1:30"...);
+                  // if the sheet is disorganized and never specified one for this block, default to 1 minute.
+                  const blockRest=(typeof block.restSeconds==="number")?block.restSeconds:60;
                   return (
                     <div key={block.id||bi} className={`member-block ${isWarmup?"warmup-block":""} ${blockDone?"block-done":""} ${locked?"ex-locked":""}`}>
                       <div className="member-block-header">
@@ -1300,6 +1384,13 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                       </div>
                       <div className="exercises-list">
                         {block.exercises.map((ex,ei)=>{
+                          if(PSEUDO_TAG_LABELS[ex.name]){
+                            return (
+                              <div key={ei} className="ex-pseudo-note" style={{padding:"6px 12px",fontSize:12,color:"var(--text3)",display:"flex",alignItems:"center",gap:6}}>
+                                <span>{ex.name} {ex.reps}</span>
+                              </div>
+                            );
+                          }
                           const isTime=ex.measType==="time"||ex.measType==="secs";
                           const wk=getCurrentWeek(selected);
                           const wd=getWeekData(ex,wk);

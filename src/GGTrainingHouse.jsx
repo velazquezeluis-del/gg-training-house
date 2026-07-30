@@ -1659,12 +1659,27 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
   const [syncing,setSyncing]=useState(false);
   const [syncMsg,setSyncMsg]=useState('');
   const [coachSettingsView,setCoachSettingsView]=useState('main');
+  const restoredSelectedUserRef=useRef(false);
 
   useEffect(()=>{
     if(selectedUser && selectedUserCardRef.current){
       setTimeout(()=>selectedUserCardRef.current?.scrollIntoView({behavior:"smooth",block:"start"}),80);
     }
   },[selectedUser]);
+
+  // Restaurar el último alumno seleccionado en el panel de coach (una sola vez, cuando ya tenemos la lista de usuarios)
+  useEffect(()=>{
+    if(restoredSelectedUserRef.current) return;
+    if(!users || users.length===0) return;
+    restoredSelectedUserRef.current=true;
+    (async()=>{
+      const savedId=await loadData('coach_last_user_id', null);
+      if(savedId){
+        const u=users.find(x=>x.id===savedId);
+        if(u) setSelectedUser(u);
+      }
+    })();
+  },[users]);
 
   const switchTab=(t)=>{
     setConfirmDelete(null);
@@ -2297,7 +2312,7 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
                 )}
                 {users.filter(u=>u.name.toLowerCase().includes(userSearch.toLowerCase())).map(u=>(
                   <button key={u.id} style={{width:"100%",background:"none",border:"none",borderBottom:"1px solid var(--border)",padding:"11px 16px",textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",gap:10,color:"var(--text)"}}
-                    onClick={()=>{setSelectedUser(u);setUserSearch('');setShowUserMenu(false);}}>
+                    onClick={()=>{setSelectedUser(u);setUserSearch('');setShowUserMenu(false);saveData('coach_last_user_id', u.id);}}>
                     <div style={{width:32,height:32,borderRadius:"50%",overflow:"hidden",flexShrink:0,background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text3)"}}>
                       {photos[u.id]?<img src={photos[u.id]} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>:<IconUser/>}
                     </div>

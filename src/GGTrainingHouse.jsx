@@ -700,6 +700,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const [showPwOld, setShowPwOld] = useState(false);
   const [showPwNew, setShowPwNew] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
   const [entering, setEntering] = useState(false);
   const [deviceUser, setDeviceUser] = useState(null);
   const [deviceLoaded, setDeviceLoaded] = useState(false);
@@ -774,7 +775,8 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
       if(session && session.userId === deviceUser.id){
         const elapsed = Date.now() - session.ts;
         const THREE_HOURS = 3 * 60 * 60 * 1000;
-        if(elapsed < THREE_HOURS){
+        const stillValid = session.remember ? true : elapsed < THREE_HOURS;
+        if(stillValid){
           const u = users.find(x=>x.id===deviceUser.id);
           if(u && u.pin){
             sessionRestoredRef.current = true;
@@ -868,11 +870,11 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     }
   },[activeDay, selected?.id]);
 
-  const doLogin=(u)=>{
+  const doLogin=(u, remember=true)=>{
     // Bind this device to the user (first login)
     if(!deviceUser){ setDeviceUser(u); saveData(KEYS.device,u); }
-    // Save session timestamp (3 hours)
-    saveData('gg_session', {userId: u.id, ts: Date.now()});
+    // Save session. Si "remember" está tildado, la sesión no vence; si no, se mantiene la ventana de 3hs
+    saveData('gg_session', {userId: u.id, ts: Date.now(), remember: !!remember});
     // First-ever login: this becomes Día/Semana 1 for this member
     if(!u.startDate){
       const start=todayKey();
@@ -1129,14 +1131,18 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
             <input className="login-input" type={showLoginPass?"text":"password"} inputMode="numeric" placeholder="Contraseña (4 dígitos)" maxLength={4}
               value={loginPass} onChange={e=>{const v=e.target.value.replace(/\D/g,"").slice(0,4);setLoginPass(v);setLoginError("");}}
               autoFocus onKeyDown={e=>{if(e.key==='Enter'){
-                if(loginPass===loginFlow.user.pin){ doLogin(loginFlow.user); }
+                if(loginPass===loginFlow.user.pin){ doLogin(loginFlow.user, rememberMe); }
                 else setLoginError("Contraseña incorrecta");
               }}}/>
             <button type="button" className="pw-eye" onClick={()=>setShowLoginPass(v=>!v)} tabIndex={-1}>{showLoginPass?<IconEyeOff/>:<IconEye/>}</button>
           </div>
+          <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:"var(--text2)",margin:"10px 0 2px",cursor:"pointer"}}>
+            <input type="checkbox" checked={rememberMe} onChange={e=>setRememberMe(e.target.checked)} style={{width:16,height:16}}/>
+            Recordar usuario y contraseña
+          </label>
           {loginError&&<p className="login-error">{loginError}</p>}
           <button className="login-btn" onClick={()=>{
-            if(loginPass===loginFlow.user.pin){ doLogin(loginFlow.user); }
+            if(loginPass===loginFlow.user.pin){ doLogin(loginFlow.user, rememberMe); }
             else setLoginError("Contraseña incorrecta");
           }}>Entrar</button>
           <button className="login-cancel" onClick={()=>{setLoginFlow(null);setLoginPass("");setLoginError("");}}>Cancelar</button>
@@ -1186,7 +1192,24 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               const uid=isNaN(loginUser)?loginUser:Number(loginUser);
               const u=users.find(x=>x.id===uid);
               if(u && u.pin){ setLoginError("Este alumno ya tiene una cuenta creada. Usá 'Iniciar sesión' en vez de crear una nueva."); return; }
-              try{ await db.updateUser(uid, {pin: loginPass, username: uname}); } catch(e){ console.error(e); }
+              try{
+                const resp = await fetch(`${SUPA_URL}/rest/v1/users?id=eq.${uid}`, {
+                  method:"PATCH",
+                  headers:{ apikey: SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}`, "Content-Type":"application/json", Prefer:"return=representation" },
+                  body: JSON.stringify({pin: loginPass, username: uname})
+                });
+                const rawText = await resp.text();
+                if(!resp.ok) throw new Error(`HTTP ${resp.status}: ${rawText.slice(0,300)}`);
+                let saved;
+                try{ saved = JSON.parse(rawText); } catch(e){ throw new Error(`Respuesta no-JSON: ${rawText.slice(0,300)}`); }
+                if(!Array.isArray(saved) || saved.length!==1 || saved[0].pin!==loginPass){
+                  throw new Error(`La base no confirmó el guardado. Respuesta: ${rawText.slice(0,300)}`);
+                }
+              } catch(e){
+                console.error("No se pudo crear la cuenta (falló el guardado en Supabase)", e);
+                setLoginError("No se pudo crear la cuenta. Revisá tu conexión y probá de nuevo.");
+                return;
+              }
               setUsers(us=>us.map(x=>x.id===uid?{...x,pin:loginPass,username:uname}:x));
               doLogin({...u, pin:loginPass, username:uname});
             }}>Crear cuenta</button>
@@ -1205,12 +1228,16 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               onKeyDown={e=>{if(e.key==='Enter') document.getElementById('username-login-btn')?.click();}}/>
             <button type="button" className="pw-eye" onClick={()=>setShowLoginPass(v=>!v)} tabIndex={-1}>{showLoginPass?<IconEyeOff/>:<IconEye/>}</button>
           </div>
+          <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:"var(--text2)",margin:"10px 0 2px",cursor:"pointer"}}>
+            <input type="checkbox" checked={rememberMe} onChange={e=>setRememberMe(e.target.checked)} style={{width:16,height:16}}/>
+            Recordar usuario y contraseña
+          </label>
           {loginError&&<p className="login-error">{loginError}</p>}
           <button id="username-login-btn" className="login-btn" onClick={()=>{
             const uname=loginUsername.trim().toLowerCase();
             const u=users.find(x=>x.username && x.username.toLowerCase()===uname);
             if(!u || u.pin!==loginPass){ setLoginError("Usuario o contraseña incorrectos"); return; }
-            doLogin(u);
+            doLogin(u, rememberMe);
           }}>Iniciar sesión</button>
           <button style={{background:"none",border:"none",color:"var(--text3)",fontSize:12,cursor:"pointer",padding:0,marginTop:10}} onClick={()=>{setLoginFlow({mode:'pickOther'});setLoginUsername("");setLoginError("");}}>
             No sé mi usuario — buscar mi nombre en la lista
@@ -1832,10 +1859,12 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
         }
       }
 
-      // Full mirror: any alumno in the app that no longer has a matching Drive
-      // file gets removed too (Google Sheets is the single source of truth).
+      // Full mirror: any alumno que YA estaba vinculado a un archivo de Drive
+      // (tiene driveFileId) y ese archivo ya no está, se borra. Los alumnos
+      // agregados a mano desde el panel de coach (sin driveFileId) nunca
+      // tuvieron un archivo que los respalde, así que no se tocan.
       const seenNames = new Set(files.map(f=>f.name.trim().toLowerCase()));
-      const orphans = users.filter(u=>!seenNames.has(u.name.trim().toLowerCase()));
+      const orphans = users.filter(u=>u.driveFileId && !seenNames.has(u.name.trim().toLowerCase()));
       if(orphans.length){
         try{
           await db.bulkDeleteUsers(orphans.map(o=>o.id));

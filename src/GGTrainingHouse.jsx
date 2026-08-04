@@ -1635,15 +1635,18 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                         const mio = reservaDia&&reservaDia.hora===hora;
                         const cupo = cupoDe(dia,hora);
                         const lleno = cupo>=CUPO_MAX_TURNO && !mio;
-                        const disabled = lleno||bloqueadoDia;
+                        const pasado = !mio && getFechaTurno(dia,hora).getTime()<Date.now();
+                        const diaLimiteAlcanzado = !reservaDia && misReservas.length>=MAX_DIAS_SEMANA;
+                        const disabled = lleno||bloqueadoDia||pasado||diaLimiteAlcanzado;
+                        const grisado = disabled&&!mio; // "transparente/bloqueado" visual pedido, no aplica a tu propio turno elegido
                         return (
                           <button key={hora} disabled={disabled} onClick={()=>reservarTurno(dia,hora)}
                             style={{
                               padding:"8px 4px",borderRadius:8,fontSize:11.5,fontWeight:600,cursor:disabled?"not-allowed":"pointer",
                               border:mio?"1px solid var(--gold)":"1px solid var(--border)",
-                              background:mio?"rgba(245,197,24,0.14)":lleno?"var(--surface3)":"var(--surface2)",
-                              color:mio?"var(--gold)":lleno?"var(--text3)":"var(--text)",
-                              opacity:disabled&&!mio?0.6:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2
+                              background:mio?"rgba(245,197,24,0.14)":"var(--surface2)",
+                              color:mio?"var(--gold)":"var(--text)",
+                              opacity:grisado?0.35:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2
                             }}>
                             <span>{horaLabel(hora)}</span>
                             <span style={{fontSize:9.5,opacity:.8}}>{cupo}/{CUPO_MAX_TURNO}</span>

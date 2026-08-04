@@ -2742,13 +2742,15 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
 function SplashScreen({ loaded, onDone }) {
   const [exploding, setExploding] = useState(false);
   const [fading, setFading] = useState(false);
+  const startedRef = useRef(false);
   useEffect(() => {
-    if (!loaded || exploding) return;
+    if (!loaded || startedRef.current) return;
+    startedRef.current = true;
     setExploding(true);
     const t1 = setTimeout(() => setFading(true), 400);   // el splash empieza a desvanecerse a mitad de la explosión
     const t2 = setTimeout(() => onDone && onDone(), 900); // recién ahí se desmonta, para que se sienta continuo
     return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [loaded, exploding]);
+  }, [loaded]);
 
   return (
     <div style={{position:"fixed",inset:0,background:"linear-gradient(180deg,#1a1200 0%,#0d0d0d 60%)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",opacity:fading?0:1,transition:"opacity .5s ease",pointerEvents:"none"}}>

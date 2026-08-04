@@ -421,7 +421,7 @@ const BLOQUEO_TURNOS_DESDE = "2026-09-01"; // a partir de esta fecha el incumpli
 // Mientras se prueba el sistema de turnos, solo estos usernames lo ven en la
 // vista de alumno. Agregar/quitar usernames acá para sumar gente a la prueba;
 // cuando esté listo para todos, basta con vaciar la lista (o borrar el check).
-const TURNOS_BETA_USERNAMES = [];
+const TURNOS_BETA_USERNAMES = ["Luis Velaquez"];
 function getWeekKey(date=new Date()){
   const sunday=new Date(date);
   sunday.setDate(date.getDate()-date.getDay());
@@ -745,6 +745,12 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
       })();
     }
   },[selected?.id]);
+  // These were declared much later in the file (after misReservas/loadReservasSemana
+  // already used them), which threw "Cannot access before initialization" the moment
+  // a student was actually selected/logged in — that's the white-screen crash.
+  const [reservasSemana, setReservasSemana] = useState([]); // [{id,user_id,dia_semana,hora}]
+  const [turnosMsg, setTurnosMsg] = useState("");
+  const [turnosLoading, setTurnosLoading] = useState(false);
   const loadReservasSemana=async()=>{
     setTurnosLoading(true);
     try{
@@ -842,9 +848,6 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const [settingsMsg, setSettingsMsg] = useState("");
   const [showNovedadPopup, setShowNovedadPopup] = useState(false);
   const [novedadPopupText, setNovedadPopupText] = useState("");
-  const [reservasSemana, setReservasSemana] = useState([]); // [{id,user_id,dia_semana,hora}]
-  const [turnosMsg, setTurnosMsg] = useState("");
-  const [turnosLoading, setTurnosLoading] = useState(false);
   const novedadCheckedRef = useRef(false);
   const photoRef = useRef(null);
   const restRef = useRef(null);

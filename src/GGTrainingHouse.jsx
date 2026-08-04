@@ -771,7 +771,11 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     if(actual&&actual.hora===hora){
       // Tocar tu propio turno confirmado lo cancela
       if(!puedeModificarTurno(actual)){ setTurnosMsg(`No se puede modificar, faltan menos de ${HORAS_MODIF_LIMITE}hs`); setTimeout(()=>setTurnosMsg(""),2500); return; }
-      try{ await db.cancelarReserva(actual.id); await loadReservasSemana(); setTurnosMsg("Turno cancelado"); }
+      try{
+        const res = await db.cancelarReserva(actual.id);
+        if(res===null) throw new Error("Supabase devolvió error al cancelar (ver consola)");
+        await loadReservasSemana(); setTurnosMsg("Turno cancelado");
+      }
       catch(e){ console.error(e); setTurnosMsg("No se pudo cancelar"); }
       setTimeout(()=>setTurnosMsg(""),2000);
       return;
@@ -780,7 +784,8 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     if(!actual&&misReservas.length>=MAX_DIAS_SEMANA){ setTurnosMsg(`Ya tenés tus ${MAX_DIAS_SEMANA} turnos de la semana. Cancelá uno para cambiarlo.`); setTimeout(()=>setTurnosMsg(""),2800); return; }
     if(cupoDe(dia,hora)>=CUPO_MAX_TURNO){ setTurnosMsg("Turno completo"); setTimeout(()=>setTurnosMsg(""),2000); return; }
     try{
-      await db.reservarTurno({user_id:selected.id, week_key:getWeekKey(), dia_semana:dia, hora});
+      const res = await db.reservarTurno({user_id:selected.id, week_key:getWeekKey(), dia_semana:dia, hora});
+      if(!res) throw new Error("Supabase devolvió error al reservar (ver consola)");
       await loadReservasSemana();
       setTurnosMsg("✓ Turno reservado");
     } catch(e){ console.error(e); setTurnosMsg("No se pudo reservar"); }

@@ -2764,7 +2764,7 @@ function SplashScreen({ loaded, onDone }) {
         .splash-logo-wrap.exploding{animation:explodeOut .68s cubic-bezier(.55,0,.85,.35) forwards}
         @keyframes heartbeat{0%{transform:scale(1)}14%{transform:scale(1.09)}28%{transform:scale(1)}42%{transform:scale(1.06)}70%{transform:scale(1)}100%{transform:scale(1)}}
         @keyframes explodeOut{0%{transform:scale(1);opacity:1}60%{opacity:1}100%{transform:scale(14);opacity:0}}
-        .splash-logo-img{width:70%;max-width:280px;height:auto;filter:drop-shadow(0 4px 24px rgba(180,130,30,0.5)) drop-shadow(0 0 40px rgba(245,197,24,0.25))}
+        .splash-logo-img{width:220px;max-width:70vw;height:auto;filter:drop-shadow(0 4px 24px rgba(180,130,30,0.5)) drop-shadow(0 0 40px rgba(245,197,24,0.25))}
         .splash-halo{position:absolute;inset:-18px;border-radius:50%;background:radial-gradient(circle, rgba(245,197,24,0.22) 0%, transparent 70%);animation:haloGlow 1.6s ease-in-out infinite}
         @keyframes haloGlow{0%,100%{opacity:0.4;transform:scale(0.92)}50%{opacity:1;transform:scale(1.08)}}
         .splash-flash{position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle, rgba(245,197,24,0.95) 0%, rgba(245,197,24,0.4) 35%, transparent 70%);opacity:0;pointer-events:none;transform:scale(0.3)}

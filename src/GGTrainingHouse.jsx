@@ -421,7 +421,7 @@ const BLOQUEO_TURNOS_DESDE = "2026-09-01"; // a partir de esta fecha el incumpli
 // Mientras se prueba el sistema de turnos, solo estos usernames lo ven en la
 // vista de alumno. Agregar/quitar usernames acá para sumar gente a la prueba;
 // cuando esté listo para todos, basta con vaciar la lista (o borrar el check).
-const TURNOS_BETA_USERNAMES = ["Luis Velaquez"];
+const TURNOS_BETA_USERNAMES = ["luis Velazquez"];
 function getWeekKey(date=new Date()){
   const sunday=new Date(date);
   sunday.setDate(date.getDate()-date.getDay());
@@ -787,7 +787,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     setTimeout(()=>setTurnosMsg(""),2000);
   };
   // Mientras se prueba el sistema de turnos, solo lo ve el/los alumno(s) en TURNOS_BETA_USERNAMES
-  const turnosHabilitado = !!selected && TURNOS_BETA_USERNAMES.includes(selected.username);
+  const turnosHabilitado = !!selected && TURNOS_BETA_USERNAMES.some(u=>u.toLowerCase()===(selected.username||"").toLowerCase());
   // Turno de hoy y si está fuera de horario (con tolerancia de 30min antes/después)
   const turnoHoy = turnosHabilitado ? misReservas.find(r=>r.dia_semana===new Date().getDay()) : null;
   const fueraDeHorario = (()=>{
@@ -1221,7 +1221,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               <div style={{position:"absolute",bottom:-2,right:-6,width:22,height:22,borderRadius:"50%",background:"var(--surface3)",border:"1.5px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:12,zIndex:2}}>⚙</div>
             </div>
             <div className="hero-active-name">{selected.name}</div>
-            <div className="hero-active-tag">{routine?routine.name:"Sin rutina asignada"}{routine?` · Semana ${getCurrentWeek(selected)}`:""}</div>
+            <div className="hero-active-tag">{selected.username?`@${selected.username}`:"⚠️ Sin usuario asignado"}{routine?` · Semana ${getCurrentWeek(selected)}`:""}</div>
             {turnosHabilitado&&(
               <button className="tap-effect" style={{marginTop:8,background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--gold)",borderRadius:8,padding:"6px 14px",fontSize:12.5,fontWeight:600,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6}} onClick={()=>setShowTurnos(true)}>
                 📅 Mis turnos{misReservas.length?` (${misReservas.length})`:""}
@@ -1678,7 +1678,8 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                     {photos[selected.id]?<img src={photos[selected.id]} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>:<IconUser/>}
                   </div>
                   <div>
-                    <div style={{fontSize:14,fontWeight:600,marginBottom:6}}>{selected.name}</div>
+                    <div style={{fontSize:14,fontWeight:600,marginBottom:2}}>{selected.name}</div>
+                    <div style={{fontSize:12,color:"var(--text3)",marginBottom:6}}>@{selected.username||"sin usuario"}</div>
                     <div style={{display:"flex",gap:8}}>
                       <button style={{background:"none",border:"1px solid var(--border)",color:"var(--text2)",borderRadius:6,padding:"5px 10px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6}} onClick={()=>photoRef.current.click()}><IconCamera/> Cambiar foto</button>
                       {photos[selected.id]&&(
@@ -2597,6 +2598,10 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
                   <button className={`btn-toggle ${u.cuota!==false?"on":"off"}`} onClick={()=>toggleCuota(u.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",fontSize:12,fontWeight:700}}>
                     {u.cuota!==false?<><IconCheck/> Al día</>:<><IconX/> Debe cuota</>}
                   </button>
+                </div>
+                <div className="uc-routine" style={{justifyContent:"space-between"}}>
+                  <span className="uc-rlabel">Usuario:</span>
+                  <span style={{fontSize:12,color:"var(--text2)",fontWeight:600}}>{u.username||"Sin definir"}</span>
                 </div>
                 <div className="uc-routine" style={{justifyContent:"space-between"}}>
                   <span className="uc-rlabel">Contraseña:</span>

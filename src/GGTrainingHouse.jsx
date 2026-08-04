@@ -791,8 +791,10 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     } catch(e){ console.error(e); setTurnosMsg("No se pudo reservar"); }
     setTimeout(()=>setTurnosMsg(""),2000);
   };
-  // Mientras se prueba el sistema de turnos, solo lo ve el/los alumno(s) en TURNOS_BETA_USERNAMES
-  const turnosHabilitado = !!selected && TURNOS_BETA_USERNAMES.some(u=>u.toLowerCase()===(selected.username||"").toLowerCase());
+  // Ya validado con la prueba — habilitado para todos los alumnos.
+  // Para volver a restringirlo a una lista de prueba, usar de nuevo:
+  // TURNOS_BETA_USERNAMES.some(u=>u.toLowerCase()===(selected.username||"").toLowerCase())
+  const turnosHabilitado = !!selected;
   // Turno de hoy y si está fuera de horario (con tolerancia de 30min antes/después)
   const turnoHoy = turnosHabilitado ? misReservas.find(r=>r.dia_semana===new Date().getDay()) : null;
   const fueraDeHorario = (()=>{

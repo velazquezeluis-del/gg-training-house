@@ -421,7 +421,7 @@ const BLOQUEO_TURNOS_DESDE = "2026-09-01"; // a partir de esta fecha el incumpli
 // Mientras se prueba el sistema de turnos, solo estos usernames lo ven en la
 // vista de alumno. Agregar/quitar usernames acá para sumar gente a la prueba;
 // cuando esté listo para todos, basta con vaciar la lista (o borrar el check).
-const TURNOS_BETA_USERNAMES = ["luis Velazquez"];
+const TURNOS_BETA_USERNAMES = ["lvelazquez"];
 function getWeekKey(date=new Date()){
   const sunday=new Date(date);
   sunday.setDate(date.getDate()-date.getDay());

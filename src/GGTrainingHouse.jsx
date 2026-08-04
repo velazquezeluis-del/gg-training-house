@@ -347,6 +347,9 @@ const db = {
   markTrained: (userId, date) => supa("training_log", {method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=representation"}, body:JSON.stringify({user_id:userId, date})}),
   bulkUpsertUsers: (rows) => supa("users?on_conflict=id", {method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=representation"}, body:JSON.stringify(rows)}),
   bulkDeleteUsers: (ids) => supa(`users?id=in.(${ids.join(",")})`, {method:"DELETE"}),
+  getReservasSemana: (weekKey) => supa(`reservas_turno?week_key=eq.${weekKey}&select=id,user_id,dia_semana,hora`),
+  reservarTurno: (data) => supa("reservas_turno?on_conflict=user_id,week_key,dia_semana", {method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=representation"}, body:JSON.stringify(data)}),
+  cancelarReserva: (id) => supa(`reservas_turno?id=eq.${id}`, {method:"DELETE"}),
 };
 
 
@@ -396,6 +399,36 @@ function formatTime(secs) {
   const m=Math.floor(s/60),r=s%60;
   return r>0?`${m}m ${r}s`:`${m}m`;
 }
+
+// --- Turnos / Calendario de horarios ---
+const DIAS_TURNO = [1,2,3,4,5,6]; // Lunes(1) a Sábado(6). Domingo(0) sin turnos.
+const DIAS_TURNO_NOMBRE = {0:"Domingo",1:"Lunes",2:"Martes",3:"Miércoles",4:"Jueves",5:"Viernes",6:"Sábado"};
+const HORAS_TURNO = [7,8,9,10,11,14,15,16,17,18,19,20,21]; // 7-12 y 14-22
+const CUPO_MAX_TURNO = 12;
+const MAX_DIAS_SEMANA = 3; // cantidad fija de turnos que cada alumno debe elegir por semana
+const HORAS_MODIF_LIMITE = 2; // no se puede modificar/cancelar un turno con menos de estas horas de anticipación
+function getFechaTurno(dia,hora){
+  const sunday=new Date(); sunday.setDate(sunday.getDate()-sunday.getDay()); sunday.setHours(0,0,0,0);
+  const d=new Date(sunday); d.setDate(sunday.getDate()+dia); d.setHours(hora,0,0,0);
+  return d;
+}
+function puedeModificarTurno(reserva){
+  if(!reserva) return true;
+  const limite=new Date(getFechaTurno(reserva.dia_semana,reserva.hora).getTime()-HORAS_MODIF_LIMITE*60*60*1000);
+  return new Date()<limite;
+}
+const BLOQUEO_TURNOS_DESDE = "2026-09-01"; // a partir de esta fecha el incumplimiento bloqueará la app
+// Mientras se prueba el sistema de turnos, solo estos usernames lo ven en la
+// vista de alumno. Agregar/quitar usernames acá para sumar gente a la prueba;
+// cuando esté listo para todos, basta con vaciar la lista (o borrar el check).
+const TURNOS_BETA_USERNAMES = [];
+function getWeekKey(date=new Date()){
+  const sunday=new Date(date);
+  sunday.setDate(date.getDate()-date.getDay());
+  sunday.setHours(0,0,0,0);
+  return `${sunday.getFullYear()}-${sunday.getMonth()+1}-${sunday.getDate()}`;
+}
+function horaLabel(h){ return `${h}:00`; }
 
 function playBeep() {
   try {
@@ -481,6 +514,14 @@ function driveRowLabel(cells){
   for(let i=0;i<Math.min(3,cells.length);i++){ if(cells[i] && cells[i].trim()) return cells[i].trim(); }
   return "";
 }
+// Same scan as driveRowLabel but returns the column index where the label was
+// found, so callers can slice the "rest of the row" starting right after it
+// instead of assuming a fixed offset (rows only have a 1-column label in the
+// current sheet template, but this stays safe if that ever changes).
+function driveLabelIndex(cells){
+  for(let i=0;i<Math.min(3,cells.length);i++){ if(cells[i] && cells[i].trim()) return i; }
+  return 0;
+}
 // Turns a Sheets API sheet object ({data:[{rowData}], merges}) into a plain 2D
 // string grid, duplicating each merged range's top-left value across the whole
 // range (so downstream parsing sees the same "repeated" cells a human would).
@@ -502,21 +543,37 @@ function buildGridFromSheet(sheet){
 // kept around so we can later write values back to the exact same cells without
 // touching the sheet's existing structure/formatting/merges at all.
 function driveParseDayBlocks(rows){
-  const blocks=[]; let curBlock=null; let hasWeekCols=false; let groupStart=0;
+  const blocks=[]; let curBlock=null; let hasWeekCols=false; let weekStride=2; let groupStart=0;
   for(const {idx,cells} of rows){
     const label=driveRowLabel(cells);
     if(!label) continue;
     const upper=label.toUpperCase();
-    const rest=cells.slice(3);
-    const looksLikeHeaderWithWeeks = !!(cells[3] && /^SEMANA\s*1/i.test(cells[3].trim()));
+    // The label only ever occupies its own single column — slicing from a
+    // fixed offset of 3 was wrong for the current template (1 label column,
+    // then N weeks × [REPS,SERIES,KG/CM]) and quietly shifted every column
+    // read by 2, which is why some KG values (and RPE values) came out blank
+    // or wrong. Slicing right after wherever the label actually was found
+    // keeps this correct regardless of template.
+    const labelIdx=driveLabelIndex(cells);
+    const rest=cells.slice(labelIdx+1);
+    const firstRest=(rest[0]||"").trim();
+    const looksLikeHeaderWithWeeks = /^SEMANA\s*1/i.test(firstRest);
     // Some coaches label sub-blocks with a free-form name ("Levantamiento
     // Bloque Uno", "Fuerza Bloque Dos"...) that we can't recognize by text,
     // but the row right under a real section title always has the column
     // headers themselves (REPS/SERIES/KG.../VUELTAS/TIEMPO) instead of actual
     // exercise data — that's the reliable signal that this is a new block,
     // not an exercise to record data for.
-    const looksLikeColumnHeaderRow = !!(cells[3] && /^(REPS|SERIES|VUELTAS|TIEMPO|KG\/?CM)$/i.test(cells[3].trim()));
+    const looksLikeColumnHeaderRow = /^(REPS|SERIES|VUELTAS|TIEMPO|KG\/?CM)$/i.test(firstRest);
     const looksLikeBlankHeader = rest.every(c=>!c || !c.trim());
+    // Whether this header row spells out a SERIES column tells us the real
+    // per-week column width (3: REPS,SERIES,KG/CM vs the older 2: REPS,KG),
+    // and whether it spells out KG/CM tells us weight data actually exists
+    // for this block — both of these used to be inferred only from the
+    // "SEMANA 1" text landing on a fixed column index, which this template
+    // doesn't do.
+    const hasSeriesCol = rest.some(c=>/^SERIES$/i.test((c||"").trim()));
+    const hasKgCol = rest.some(c=>/^KG\/?CM$/i.test((c||"").trim()));
     const isSkippable = DRIVE_SKIP_PREFIXES.some(p=>upper.startsWith(p)) || upper.startsWith("INTENSIDAD/CARGA");
     if(DRIVE_SECTION_HEADERS.has(upper) || /^BLOQUE\s*\d*$/.test(upper) || (!isSkippable && (looksLikeHeaderWithWeeks || looksLikeColumnHeaderRow || looksLikeBlankHeader))){
       // Recognized name, OR an unrecognized header we've never seen before —
@@ -528,16 +585,17 @@ function driveParseDayBlocks(rows){
       if(curBlock && curBlock.exercises.length===0) blocks.pop(); // drop empty placeholder left by a category-only row (e.g. "Desarrollo")
       curBlock={name:driveTitleCase(label), type:(upper.includes("MOVILIDAD")||upper.includes("CALENTAMIENTO"))?"warmup":"block", exercises:[]};
       blocks.push(curBlock);
-      hasWeekCols = looksLikeHeaderWithWeeks;
+      hasWeekCols = looksLikeHeaderWithWeeks || hasKgCol;
+      weekStride = hasSeriesCol ? 3 : 2;
       groupStart=0;
       continue;
     }
-    if(cells[3] && cells[3].toUpperCase().startsWith("SEMANA 1")){ hasWeekCols=true; continue; }
+    if(firstRest.toUpperCase().startsWith("SEMANA 1")){ hasWeekCols=true; continue; }
     if(upper.startsWith("INTENSIDAD/CARGA")){
       // Apply this RPE row to every exercise added since the last RPE/group marker
       if(curBlock){
         const rpeVals=[0,1,2,3].map(wi=>{
-          const cell=rest[wi*2]||"";
+          const cell=rest[wi*weekStride]||"";
           const m=cell.match(/(\d+)/);
           return m?m[1]:"";
         });
@@ -565,8 +623,8 @@ function driveParseDayBlocks(rows){
     }
     if(!curBlock){ curBlock={name:"Bloque",type:"block",exercises:[]}; blocks.push(curBlock); }
     const weeks=[0,1,2,3].map(wi=>{
-      let r=(rest[wi*2]||"").trim();
-      let kg=(hasWeekCols?(rest[wi*2+1]||""):"").trim();
+      let r=(rest[wi*weekStride]||"").trim();
+      let kg=(hasWeekCols?(rest[wi*weekStride+weekStride-1]||""):"").trim();
       if(kg===r) kg="";
       if(kg==="-") kg="";
       return {reps:r, kg};
@@ -687,6 +745,67 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
       })();
     }
   },[selected?.id]);
+  const loadReservasSemana=async()=>{
+    setTurnosLoading(true);
+    try{
+      const rows=await db.getReservasSemana(getWeekKey());
+      setReservasSemana(rows||[]);
+    } catch(e){ console.error('No se pudieron cargar los turnos', e); }
+    setTurnosLoading(false);
+  };
+  useEffect(()=>{
+    if(selected) loadReservasSemana();
+  },[selected?.id]);
+  const misReservas = selected ? reservasSemana.filter(r=>r.user_id===selected.id) : [];
+  const misReservaDia = (dia) => misReservas.find(r=>r.dia_semana===dia);
+  const cupoDe = (dia,hora) => reservasSemana.filter(r=>r.dia_semana===dia && r.hora===hora).length;
+  const reservarTurno = async(dia,hora)=>{
+    if(!selected) return;
+    const actual = misReservaDia(dia);
+    if(actual&&actual.hora===hora){
+      // Tocar tu propio turno confirmado lo cancela
+      if(!puedeModificarTurno(actual)){ setTurnosMsg(`No se puede modificar, faltan menos de ${HORAS_MODIF_LIMITE}hs`); setTimeout(()=>setTurnosMsg(""),2500); return; }
+      try{ await db.cancelarReserva(actual.id); await loadReservasSemana(); setTurnosMsg("Turno cancelado"); }
+      catch(e){ console.error(e); setTurnosMsg("No se pudo cancelar"); }
+      setTimeout(()=>setTurnosMsg(""),2000);
+      return;
+    }
+    if(actual&&!puedeModificarTurno(actual)){ setTurnosMsg(`No se puede modificar, faltan menos de ${HORAS_MODIF_LIMITE}hs`); setTimeout(()=>setTurnosMsg(""),2500); return; }
+    if(!actual&&misReservas.length>=MAX_DIAS_SEMANA){ setTurnosMsg(`Ya tenés tus ${MAX_DIAS_SEMANA} turnos de la semana. Cancelá uno para cambiarlo.`); setTimeout(()=>setTurnosMsg(""),2800); return; }
+    if(cupoDe(dia,hora)>=CUPO_MAX_TURNO){ setTurnosMsg("Turno completo"); setTimeout(()=>setTurnosMsg(""),2000); return; }
+    try{
+      await db.reservarTurno({user_id:selected.id, week_key:getWeekKey(), dia_semana:dia, hora});
+      await loadReservasSemana();
+      setTurnosMsg("✓ Turno reservado");
+    } catch(e){ console.error(e); setTurnosMsg("No se pudo reservar"); }
+    setTimeout(()=>setTurnosMsg(""),2000);
+  };
+  // Mientras se prueba el sistema de turnos, solo lo ve el/los alumno(s) en TURNOS_BETA_USERNAMES
+  const turnosHabilitado = !!selected && TURNOS_BETA_USERNAMES.includes(selected.username);
+  // Turno de hoy y si está fuera de horario (con tolerancia de 30min antes/después)
+  const turnoHoy = turnosHabilitado ? misReservas.find(r=>r.dia_semana===new Date().getDay()) : null;
+  const fueraDeHorario = (()=>{
+    if(!turnoHoy) return false;
+    const now=new Date();
+    const inicio=new Date(now); inicio.setHours(turnoHoy.hora,0,0,0); inicio.setMinutes(inicio.getMinutes()-30);
+    const fin=new Date(now); fin.setHours(turnoHoy.hora,0,0,0); fin.setMinutes(fin.getMinutes()+90);
+    return now<inicio || now>fin;
+  })();
+  const [showTurnos, setShowTurnos] = useState(false);
+  const turnosFaltan = MAX_DIAS_SEMANA - misReservas.length;
+  const turnosIncompletos = !!selected && !turnosLoading && turnosFaltan>0;
+  const cerrarTurnos = async()=>{
+    if(selected){ await saveData(`gg_turnos_popup_${selected.id}_${getWeekKey()}`, true); }
+    setShowTurnos(false);
+  };
+  useEffect(()=>{
+    if(!turnosHabilitado || turnosLoading) return;
+    (async()=>{
+      const key=`gg_turnos_popup_${selected.id}_${getWeekKey()}`;
+      const yaVisto = await loadData(key, false);
+      if(!yaVisto && turnosFaltan>0) setShowTurnos(true);
+    })();
+  },[selected?.id, turnosLoading, turnosHabilitado]);
   const [restTimer, setRestTimer] = useState(null);
   const [trainLog, setTrainLog] = useState({});
   const [loginFlow, setLoginFlow] = useState(null);
@@ -723,6 +842,9 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const [settingsMsg, setSettingsMsg] = useState("");
   const [showNovedadPopup, setShowNovedadPopup] = useState(false);
   const [novedadPopupText, setNovedadPopupText] = useState("");
+  const [reservasSemana, setReservasSemana] = useState([]); // [{id,user_id,dia_semana,hora}]
+  const [turnosMsg, setTurnosMsg] = useState("");
+  const [turnosLoading, setTurnosLoading] = useState(false);
   const novedadCheckedRef = useRef(false);
   const photoRef = useRef(null);
   const restRef = useRef(null);
@@ -1097,6 +1219,11 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
             </div>
             <div className="hero-active-name">{selected.name}</div>
             <div className="hero-active-tag">{routine?routine.name:"Sin rutina asignada"}{routine?` · Semana ${getCurrentWeek(selected)}`:""}</div>
+            {turnosHabilitado&&(
+              <button className="tap-effect" style={{marginTop:8,background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--gold)",borderRadius:8,padding:"6px 14px",fontSize:12.5,fontWeight:600,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6}} onClick={()=>setShowTurnos(true)}>
+                📅 Mis turnos{misReservas.length?` (${misReservas.length})`:""}
+              </button>
+            )}
           </>
         ):(
           <>
@@ -1105,6 +1232,15 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
           </>
         )}
       </div>
+
+      {selected&&fueraDeHorario&&(
+        <div style={{margin:"0 14px 12px",padding:"10px 14px",borderRadius:10,background:"rgba(245,197,24,0.1)",border:"1px solid rgba(245,197,24,0.35)",display:"flex",alignItems:"flex-start",gap:10}}>
+          <span style={{fontSize:18,lineHeight:1}}>⚠️</span>
+          <div style={{fontSize:12.5,color:"var(--text2)",lineHeight:1.45}}>
+            Estás fuera de tu horario reservado ({DIAS_TURNO_NOMBRE[turnoHoy.dia_semana]} {horaLabel(turnoHoy.hora)}hs). A partir de septiembre esto va a impedir el uso de la app.
+          </div>
+        </div>
+      )}
 
       {!selected&&!loginFlow&&(()=>{
         const novedad=gymInfo.novedad||"";
@@ -1460,6 +1596,63 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
         </div>
       )}
 
+      {showTurnos&&turnosHabilitado&&(
+        <div className="rest-overlay" onClick={cerrarTurnos}>
+          <div className="rest-box" style={{width:"92%",maxWidth:420,padding:18,maxHeight:"82vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+              <div className="rest-label" style={{margin:0}}>{turnosIncompletos?"ELEGÍ TUS TURNOS":"MIS TURNOS"}</div>
+              <button style={{background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:20,lineHeight:1}} onClick={cerrarTurnos}>✕</button>
+            </div>
+            {turnosIncompletos?(
+              <p style={{fontSize:12.5,color:"var(--text2)",margin:"4px 0 14px",lineHeight:1.45}}>
+                Elegí tus días de entrenamiento para esta semana. Te faltan <b>{turnosFaltan}</b> de {MAX_DIAS_SEMANA} ({misReservas.length}/{MAX_DIAS_SEMANA} elegidos).
+              </p>
+            ):(
+              <p style={{fontSize:12,color:"var(--text3)",margin:"4px 0 14px",lineHeight:1.4}}>Tocá tu propio turno para cancelarlo o cambiarlo (hasta {HORAS_MODIF_LIMITE}hs antes). Cupo máximo {CUPO_MAX_TURNO} por franja.</p>
+            )}
+            {turnosLoading?(
+              <p style={{textAlign:"center",color:"var(--text3)",fontSize:13,padding:"20px 0"}}>Cargando...</p>
+            ):(
+              <div style={{display:"flex",flexDirection:"column",gap:14}}>
+                {DIAS_TURNO.map(dia=>{
+                  const reservaDia = misReservaDia(dia);
+                  const bloqueadoDia = reservaDia&&!puedeModificarTurno(reservaDia);
+                  return (
+                  <div key={dia}>
+                    <div style={{fontSize:12,fontWeight:700,color:"var(--gold)",letterSpacing:.4,marginBottom:6,textTransform:"uppercase",display:"flex",alignItems:"center",gap:6}}>
+                      {DIAS_TURNO_NOMBRE[dia]}{bloqueadoDia&&<span title={`No modificable, faltan menos de ${HORAS_MODIF_LIMITE}hs`} style={{fontSize:11}}>🔒</span>}
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>
+                      {HORAS_TURNO.map(hora=>{
+                        const mio = reservaDia&&reservaDia.hora===hora;
+                        const cupo = cupoDe(dia,hora);
+                        const lleno = cupo>=CUPO_MAX_TURNO && !mio;
+                        const disabled = lleno||bloqueadoDia;
+                        return (
+                          <button key={hora} disabled={disabled} onClick={()=>reservarTurno(dia,hora)}
+                            style={{
+                              padding:"8px 4px",borderRadius:8,fontSize:11.5,fontWeight:600,cursor:disabled?"not-allowed":"pointer",
+                              border:mio?"1px solid var(--gold)":"1px solid var(--border)",
+                              background:mio?"rgba(245,197,24,0.14)":lleno?"var(--surface3)":"var(--surface2)",
+                              color:mio?"var(--gold)":lleno?"var(--text3)":"var(--text)",
+                              opacity:disabled&&!mio?0.6:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2
+                            }}>
+                            <span>{horaLabel(hora)}</span>
+                            <span style={{fontSize:9.5,opacity:.8}}>{cupo}/{CUPO_MAX_TURNO}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  );
+                })}
+              </div>
+            )}
+            {turnosMsg&&<p style={{textAlign:"center",color:"var(--gold)",fontSize:13,marginTop:14}}>{turnosMsg}</p>}
+          </div>
+        </div>
+      )}
+
       {showSettings&&selected&&(
         <div className="rest-overlay" onClick={()=>{setShowSettings(false);setSettingsView("main");setNewPass("");setNewPass2("");setNewPass3("");setSettingsMsg("");}}>
           <div className="rest-box" style={{width:"90%",maxWidth:320,padding:20}} onClick={e=>e.stopPropagation()}>
@@ -1668,6 +1861,15 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
   coachNewPin,setCoachNewPin,coachNewPin2,setCoachNewPin2,PIN,setPIN,
   coachBioAvailable,coachBioRegistered,setCoachBioRegistered,registerCoachBio,onExit }) {
   const [tab,setTab]=useState("users");
+  const [reservasSemanaCoach,setReservasSemanaCoach]=useState([]);
+  const [turnosCoachLoading,setTurnosCoachLoading]=useState(false);
+  const loadReservasSemanaCoach=async()=>{
+    setTurnosCoachLoading(true);
+    try{ const rows=await db.getReservasSemana(getWeekKey()); setReservasSemanaCoach(rows||[]); }
+    catch(e){ console.error('No se pudieron cargar los turnos', e); }
+    setTurnosCoachLoading(false);
+  };
+  useEffect(()=>{ if(tab==="turnos") loadReservasSemanaCoach(); },[tab]);
   const [editRoutine,setEditRoutine]=useState(null);
   const [userSearch,setUserSearch]=useState("");
   const [selectedUser,setSelectedUser]=useState(null);
@@ -2097,6 +2299,7 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
         <div className="coach-tabs">
           <button className={`ctab ${tab==="users"?"active":""}`} onClick={()=>switchTab("users")}><IconUser/> Alumnos</button>
           <button className={`ctab ${tab==="info"?"active":""}`} onClick={()=>switchTab("info")}>📢 Info</button>
+          <button className={`ctab ${tab==="turnos"?"active":""}`} onClick={()=>switchTab("turnos")}>📅 Turnos</button>
         </div>
       </div>
 
@@ -2441,6 +2644,55 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
             }}>Guardar</button>
             {infoSaved&&infoSaveStatus===null&&<p style={{textAlign:"center",color:"var(--gold)",fontSize:13,marginTop:10}}>✓ Guardado</p>}
           </div>
+        </div>
+      )}
+
+      {tab==="turnos"&&(
+        <div className="tab-content">
+          <div className="tab-topbar" style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <h2>Turnos de la semana</h2>
+            <button style={{background:"none",border:"1px solid var(--border)",color:"var(--text2)",borderRadius:7,padding:"5px 10px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6}} onClick={loadReservasSemanaCoach}><IconRefresh size={14}/> Actualizar</button>
+          </div>
+          {turnosCoachLoading?(
+            <p style={{textAlign:"center",color:"var(--text3)",fontSize:13,padding:"20px 0"}}>Cargando...</p>
+          ):(
+            <div style={{padding:"0 4px",display:"flex",flexDirection:"column",gap:16}}>
+              {DIAS_TURNO.map(dia=>(
+                <div key={dia}>
+                  <div style={{fontSize:12,fontWeight:700,color:"var(--gold)",letterSpacing:.4,marginBottom:8,textTransform:"uppercase"}}>{DIAS_TURNO_NOMBRE[dia]}</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {HORAS_TURNO.map(hora=>{
+                      const anotados = reservasSemanaCoach.filter(r=>r.dia_semana===dia && r.hora===hora);
+                      if(!anotados.length) return null;
+                      return (
+                        <div key={hora} style={{border:"1px solid var(--border)",borderRadius:9,padding:"8px 12px",background:"var(--surface2)"}}>
+                          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                            <span style={{fontSize:12.5,fontWeight:700}}>{horaLabel(hora)}hs</span>
+                            <span style={{fontSize:11,color:"var(--text3)"}}>{anotados.length}/{CUPO_MAX_TURNO}</span>
+                          </div>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                            {anotados.map(r=>{
+                              const u=users.find(x=>x.id===r.user_id);
+                              return (
+                                <span key={r.id} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"3px 6px 3px 10px",background:"var(--surface3)",border:"1px solid var(--border)",borderRadius:6,fontSize:11.5}}>
+                                  {u?u.name:"(alumno eliminado)"}
+                                  <button title="Quitar del turno" style={{background:"none",border:"none",color:"#ff5c5c",cursor:"pointer",fontSize:13,lineHeight:1,padding:2}} onClick={async()=>{
+                                    await db.cancelarReserva(r.id);
+                                    loadReservasSemanaCoach();
+                                  }}>✕</button>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              {reservasSemanaCoach.length===0&&<p style={{textAlign:"center",color:"var(--text3)",fontSize:13,padding:"10px 0"}}>Todavía no hay turnos reservados esta semana.</p>}
+            </div>
+          )}
         </div>
       )}
 

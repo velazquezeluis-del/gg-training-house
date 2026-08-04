@@ -751,13 +751,13 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const [reservasSemana, setReservasSemana] = useState([]); // [{id,user_id,dia_semana,hora}]
   const [turnosMsg, setTurnosMsg] = useState("");
   const [turnosLoading, setTurnosLoading] = useState(false);
-  const loadReservasSemana=async()=>{
-    setTurnosLoading(true);
+  const loadReservasSemana=async(silent)=>{
+    if(!silent) setTurnosLoading(true);
     try{
       const rows=await db.getReservasSemana(getWeekKey());
       setReservasSemana(rows||[]);
     } catch(e){ console.error('No se pudieron cargar los turnos', e); }
-    setTurnosLoading(false);
+    if(!silent) setTurnosLoading(false);
   };
   useEffect(()=>{
     if(selected) loadReservasSemana();
@@ -774,7 +774,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
       try{
         const res = await db.cancelarReserva(actual.id);
         if(res===null) throw new Error("Supabase devolvió error al cancelar (ver consola)");
-        await loadReservasSemana(); setTurnosMsg("Turno cancelado");
+        await loadReservasSemana(true); setTurnosMsg("Turno cancelado");
       }
       catch(e){ console.error(e); setTurnosMsg("No se pudo cancelar"); }
       setTimeout(()=>setTurnosMsg(""),2000);
@@ -786,7 +786,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     try{
       const res = await db.reservarTurno({user_id:selected.id, week_key:getWeekKey(), dia_semana:dia, hora});
       if(!res) throw new Error("Supabase devolvió error al reservar (ver consola)");
-      await loadReservasSemana();
+      await loadReservasSemana(true);
       setTurnosMsg("✓ Turno reservado");
     } catch(e){ console.error(e); setTurnosMsg("No se pudo reservar"); }
     setTimeout(()=>setTurnosMsg(""),2000);
@@ -1229,7 +1229,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
             <div className="hero-active-tag">{selected.username?`@${selected.username}`:"⚠️ Sin usuario asignado"}{routine?` · Semana ${getCurrentWeek(selected)}`:""}</div>
             {turnosHabilitado&&(
               <button className="tap-effect" style={{marginTop:8,background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--gold)",borderRadius:8,padding:"6px 14px",fontSize:12.5,fontWeight:600,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6}} onClick={()=>setShowTurnos(true)}>
-                📅 GG Calendar{misReservas.length?` (${misReservas.length})`:""}
+                📅 GG Calendar ({misReservas.length}/{MAX_DIAS_SEMANA})
               </button>
             )}
           </>
@@ -1242,11 +1242,11 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
       </div>
 
       {selected&&(
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px 0"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px 16px"}}>
           <div style={{display:"flex",alignItems:"center",gap:8,fontFamily:"var(--font-display)",fontSize:12,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:"var(--text3)"}}>
             <span className="brand-dot"/><span>GG Training House</span>
           </div>
-          <button className="exit-btn" style={{padding:"7px 14px",fontSize:13}} onClick={()=>{setSelected(null);setDone({});setActiveDay(0);saveData("gg_session",null);}}><IconArrowLeft/> Salir</button>
+          <button style={{display:"inline-flex",alignItems:"center",gap:7,padding:"7px 14px",borderRadius:999,background:"#b53a3a",border:"1px solid #d95050",color:"#fff",fontFamily:"var(--font-body)",fontWeight:700,fontSize:13,cursor:"pointer"}} onClick={()=>{setSelected(null);setDone({});setActiveDay(0);saveData("gg_session",null);}}><IconArrowLeft/> Salir</button>
         </div>
       )}
 

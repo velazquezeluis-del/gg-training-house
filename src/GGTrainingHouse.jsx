@@ -19,8 +19,8 @@ const GYM_RADIUS_M = 150;
 const SUPA_URL = "https://xhyvwfbalacozhkpegnk.supabase.co";
 const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhoeXZ3ZmJhbGFjb3poa3BlZ25rIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM0Njg5OTcsImV4cCI6MjA5OTA0NDk5N30.eq1JCQqmplbRU4hQq_xK92-o0UjXi-bjcLYqEQwCmhs";
 const supa = (path, opts={}) => fetch(`${SUPA_URL}/rest/v1/${path}`, {
-  headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}`, "Content-Type": "application/json", Prefer: "return=representation", ...opts.headers },
-  ...opts
+  ...opts,
+  headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}`, "Content-Type": "application/json", Prefer: "return=representation", ...opts.headers }
 }).then(r => r.ok ? r.json() : r.text().then(t => { console.error(t); return null; }));
 
 function GGApp() {

@@ -1229,7 +1229,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
             <div className="hero-active-tag">{selected.username?`@${selected.username}`:"⚠️ Sin usuario asignado"}{routine?` · Semana ${getCurrentWeek(selected)}`:""}</div>
             {turnosHabilitado&&(
               <button className="tap-effect" style={{marginTop:8,background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--gold)",borderRadius:8,padding:"6px 14px",fontSize:12.5,fontWeight:600,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6}} onClick={()=>setShowTurnos(true)}>
-                📅 Mis turnos{misReservas.length?` (${misReservas.length})`:""}
+                📅 GG Calendar{misReservas.length?` (${misReservas.length})`:""}
               </button>
             )}
           </>
@@ -1240,6 +1240,15 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
           </>
         )}
       </div>
+
+      {selected&&(
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px 0"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,fontFamily:"var(--font-display)",fontSize:12,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:"var(--text3)"}}>
+            <span className="brand-dot"/><span>GG Training House</span>
+          </div>
+          <button className="exit-btn" style={{padding:"7px 14px",fontSize:13}} onClick={()=>{setSelected(null);setDone({});setActiveDay(0);saveData("gg_session",null);}}><IconArrowLeft/> Salir</button>
+        </div>
+      )}
 
       {selected&&fueraDeHorario&&(
         <div style={{margin:"0 14px 12px",padding:"10px 14px",borderRadius:10,background:"rgba(245,197,24,0.1)",border:"1px solid rgba(245,197,24,0.35)",display:"flex",alignItems:"flex-start",gap:10}}>
@@ -1503,9 +1512,6 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
 
       {selected&&(
         <div className="routine-card">
-          <div className="routine-header">
-            <button className="exit-btn" style={{marginBottom:16}} onClick={()=>{setSelected(null);setDone({});setActiveDay(0);saveData("gg_session",null);}}><IconArrowLeft/> Salir</button>
-          </div>
           {selected&&users.find(u=>u.id===selected.id)?.cuota===false?(
             <div className="no-routine" style={{gap:16}}>
               <div style={{fontSize:48}}>🔒</div>
@@ -1608,7 +1614,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
         <div className="rest-overlay" onClick={cerrarTurnos}>
           <div className="rest-box" style={{width:"92%",maxWidth:420,padding:18,maxHeight:"82vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
-              <div className="rest-label" style={{margin:0}}>{turnosIncompletos?"ELEGÍ TUS TURNOS":"MIS TURNOS"}</div>
+              <div className="rest-label" style={{margin:0}}>{turnosIncompletos?"ELEGÍ TUS DÍAS":"GG CALENDAR"}</div>
               <button style={{background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:20,lineHeight:1}} onClick={cerrarTurnos}>✕</button>
             </div>
             {turnosIncompletos?(
@@ -2311,7 +2317,7 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
         <div className="coach-tabs">
           <button className={`ctab ${tab==="users"?"active":""}`} onClick={()=>switchTab("users")}><IconUser/> Alumnos</button>
           <button className={`ctab ${tab==="info"?"active":""}`} onClick={()=>switchTab("info")}>📢 Info</button>
-          <button className={`ctab ${tab==="turnos"?"active":""}`} onClick={()=>switchTab("turnos")}>📅 Turnos</button>
+          <button className={`ctab ${tab==="turnos"?"active":""}`} onClick={()=>switchTab("turnos")}>📅 GG Calendar</button>
         </div>
       </div>
 
@@ -2666,7 +2672,7 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
       {tab==="turnos"&&(
         <div className="tab-content">
           <div className="tab-topbar" style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <h2>Turnos de la semana</h2>
+            <h2>GG Calendar de la semana</h2>
             <button style={{background:"none",border:"1px solid var(--border)",color:"var(--text2)",borderRadius:7,padding:"5px 10px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6}} onClick={loadReservasSemanaCoach}><IconRefresh size={14}/> Actualizar</button>
           </div>
           {turnosCoachLoading?(

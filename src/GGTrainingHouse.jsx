@@ -2739,34 +2739,40 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
   );
 }
 
-function SplashScreen({ loaded }) {
-  const [progress, setProgress] = useState(0);
+function SplashScreen({ loaded, onDone }) {
+  const [exploding, setExploding] = useState(false);
+  const [fading, setFading] = useState(false);
   useEffect(() => {
-    let p = 0;
-    const interval = setInterval(() => {
-      p += 1;
-      setProgress(p);
-      if (p >= 100) clearInterval(interval);
-    }, 55);
-    return () => clearInterval(interval);
-  }, []);
-
-  const R = 54, circ = 2 * Math.PI * R, rawDash = (progress / 100) * circ, dash = progress >= 100 ? circ + 1 : rawDash;
+    if (!loaded || exploding) return;
+    setExploding(true);
+    const t1 = setTimeout(() => setFading(true), 400);   // el splash empieza a desvanecerse a mitad de la explosión
+    const t2 = setTimeout(() => onDone && onDone(), 900); // recién ahí se desmonta, para que se sienta continuo
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [loaded, exploding]);
 
   return (
-    <div style={{position:"fixed",inset:0,background:"linear-gradient(180deg,#1a1200 0%,#0d0d0d 60%)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-      <img src="/gg-logo.png" alt="GG Training House" style={{width:"70%",maxWidth:280,height:"auto",marginBottom:40,animation:"splashLogoIn 0.8s cubic-bezier(.34,1.26,.64,1) both",filter:"drop-shadow(0 4px 24px rgba(180,130,30,0.5)) drop-shadow(0 0 40px rgba(245,197,24,0.3))",mixBlendMode:"screen"}}/>
-      <div style={{position:"relative",width:128,height:128}}>
-        <div style={{position:"absolute",inset:-16,borderRadius:"50%",background:"radial-gradient(circle, rgba(245,197,24,0.18) 0%, transparent 70%)",animation:"haloGlow 1.6s ease-in-out infinite"}}/>
-        <svg width="128" height="128" viewBox="0 0 128 128" style={{position:"relative"}}>
-          <circle cx="64" cy="64" r={R} fill="none" stroke="#1e1a0e" strokeWidth="7"/>
-          <circle cx="64" cy="64" r={R} fill="none" stroke="url(#goldGrad)" strokeWidth="7" strokeDasharray={`${dash} ${circ}`} strokeLinecap="butt" transform="rotate(-90 64 64)" style={{transition:"stroke-dasharray 0.4s ease",filter:"drop-shadow(0 0 6px rgba(245,197,24,0.7))"}}/>
-          <defs><linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stopColor="#b8860b"/><stop offset="100%" stopColor="#f5c518"/></linearGradient></defs>
-        </svg>
-        <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Barlow Condensed',sans-serif",fontSize:22,fontWeight:700,color:"#f5c518",letterSpacing:1}}>{Math.round(progress)}%</div>
+    <div style={{position:"fixed",inset:0,background:"linear-gradient(180deg,#1a1200 0%,#0d0d0d 60%)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",opacity:fading?0:1,transition:"opacity .5s ease",pointerEvents:"none"}}>
+      <div className={`splash-logo-wrap${exploding?" exploding":""}`}>
+        <div className="splash-halo"/>
+        <div className={`splash-flash${exploding?" exploding":""}`}/>
+        <img src="/gg-logo.png" alt="GG Training House" className="splash-logo-img"/>
       </div>
-      <p style={{marginTop:20,fontFamily:"'Barlow Condensed',sans-serif",fontSize:12,letterSpacing:3,textTransform:"uppercase",color:"#555",fontWeight:600}}>Cargando...</p>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700&display=swap'); @keyframes splashLogoIn{from{opacity:0;transform:scale(0.82) translateY(20px)}to{opacity:1;transform:scale(1) translateY(0)}} @keyframes haloGlow{0%,100%{opacity:0.4;transform:scale(0.92)}50%{opacity:1;transform:scale(1.08)}}`}</style>
+      <p className={`splash-loading-label${exploding?" fadeOut":""}`}>Cargando...</p>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700&display=swap');
+        .splash-logo-wrap{position:relative;margin-bottom:40px;animation:heartbeat 1.15s ease-in-out infinite;transform-origin:center}
+        .splash-logo-wrap.exploding{animation:explodeOut .68s cubic-bezier(.55,0,.85,.35) forwards}
+        @keyframes heartbeat{0%{transform:scale(1)}14%{transform:scale(1.09)}28%{transform:scale(1)}42%{transform:scale(1.06)}70%{transform:scale(1)}100%{transform:scale(1)}}
+        @keyframes explodeOut{0%{transform:scale(1);opacity:1}60%{opacity:1}100%{transform:scale(14);opacity:0}}
+        .splash-logo-img{width:70%;max-width:280px;height:auto;filter:drop-shadow(0 4px 24px rgba(180,130,30,0.5)) drop-shadow(0 0 40px rgba(245,197,24,0.25))}
+        .splash-halo{position:absolute;inset:-18px;border-radius:50%;background:radial-gradient(circle, rgba(245,197,24,0.22) 0%, transparent 70%);animation:haloGlow 1.6s ease-in-out infinite}
+        @keyframes haloGlow{0%,100%{opacity:0.4;transform:scale(0.92)}50%{opacity:1;transform:scale(1.08)}}
+        .splash-flash{position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle, rgba(245,197,24,0.95) 0%, rgba(245,197,24,0.4) 35%, transparent 70%);opacity:0;pointer-events:none;transform:scale(0.3)}
+        .splash-flash.exploding{animation:flashOut .68s cubic-bezier(.55,0,.85,.35) forwards}
+        @keyframes flashOut{0%{opacity:0;transform:scale(0.3)}35%{opacity:0.9;transform:scale(1.4)}100%{opacity:0;transform:scale(6)}}
+        .splash-loading-label{margin-top:20px;font-family:'Barlow Condensed',sans-serif;font-size:12px;letter-spacing:3px;text-transform:uppercase;color:#555;font-weight:600;transition:opacity .3s ease}
+        .splash-loading-label.fadeOut{opacity:0}
+      `}</style>
     </div>
   );
 }
@@ -2852,13 +2858,6 @@ function AppInner() {
     })();
   },[]);
 
-  useEffect(()=>{
-    if(loaded){
-      // Wait for bar to finish (100 steps × 55ms = 5500ms) then extra pause
-      setTimeout(()=>setSplashDone(true), 6000);
-    }
-  },[loaded]);
-
   const enterCoach=()=>{
     if(coachPin===PIN){
       setMode("coach");setShowPinModal(false);setCoachPin("");setPinError(false);
@@ -2907,7 +2906,7 @@ function AppInner() {
     } catch(e) { setCoachSettingsMsg("Error al registrar biometría"); setShowCoachBioPrompt(false); }
   };
 
-  if(!splashDone) return <SplashScreen loaded={loaded}/>;
+  if(!splashDone) return <SplashScreen loaded={loaded} onDone={()=>setSplashDone(true)}/>;
 
   return(
     <>

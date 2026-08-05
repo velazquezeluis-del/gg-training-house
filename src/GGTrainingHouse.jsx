@@ -403,7 +403,9 @@ function formatTime(secs) {
 // --- Turnos / Calendario de horarios ---
 const DIAS_TURNO = [1,2,3,4,5,6]; // Lunes(1) a Sábado(6). Domingo(0) sin turnos.
 const DIAS_TURNO_NOMBRE = {0:"Domingo",1:"Lunes",2:"Martes",3:"Miércoles",4:"Jueves",5:"Viernes",6:"Sábado"};
-const HORAS_TURNO = [7,8,9,10,11,14,15,16,17,18,19,20,21]; // 7-12 y 14-22
+const HORAS_TURNO = [7,8,9,10,11,14,15,16,17,18,19,20,21]; // Lunes a Viernes: 7-12 y 14-22
+const HORAS_TURNO_SABADO = [9,10,11,12,13]; // Sábado: abierto corrido de 9 a 14, último turno 13
+function horasDelDia(dia){ return dia===6 ? HORAS_TURNO_SABADO : HORAS_TURNO; }
 const CUPO_MAX_TURNO = 12;
 const MAX_DIAS_SEMANA = 3; // cantidad fija de turnos que cada alumno debe elegir por semana
 const HORAS_MODIF_LIMITE = 2; // no se puede modificar/cancelar un turno con menos de estas horas de anticipación
@@ -1639,7 +1641,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                       {DIAS_TURNO_NOMBRE[dia]}{bloqueadoDia&&<span title={`No modificable, faltan menos de ${HORAS_MODIF_LIMITE}hs`} style={{fontSize:11}}>🔒</span>}
                     </div>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>
-                      {HORAS_TURNO.map(hora=>{
+                      {horasDelDia(dia).map(hora=>{
                         const mio = reservaDia&&reservaDia.hora===hora;
                         const cupo = cupoDe(dia,hora);
                         const lleno = cupo>=CUPO_MAX_TURNO && !mio;
@@ -2685,7 +2687,7 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
                 <div key={dia}>
                   <div style={{fontSize:12,fontWeight:700,color:"var(--gold)",letterSpacing:.4,marginBottom:8,textTransform:"uppercase"}}>{DIAS_TURNO_NOMBRE[dia]}</div>
                   <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                    {HORAS_TURNO.map(hora=>{
+                    {horasDelDia(dia).map(hora=>{
                       const anotados = reservasSemanaCoach.filter(r=>r.dia_semana===dia && r.hora===hora);
                       if(!anotados.length) return null;
                       return (

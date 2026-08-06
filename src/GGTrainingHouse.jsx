@@ -374,6 +374,93 @@ async function toDecodableBlob(file){
   }
 }
 
+function PhotoCropModal({ file, onCancel, onConfirm }) {
+  const SIZE = 240; // tamaño del recuadro circular de vista previa, en px
+  const [imgEl, setImgEl] = useState(null);
+  const [baseScale, setBaseScale] = useState(1);
+  const [zoom, setZoom] = useState(1);
+  const [offset, setOffset] = useState({x:0,y:0});
+  const dragRef = useRef(null);
+
+  useEffect(()=>{
+    let cancelled=false;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      if(cancelled) return;
+      const base = SIZE / Math.min(img.width, img.height);
+      setBaseScale(base); setZoom(1);
+      setOffset({x:(SIZE-img.width*base)/2, y:(SIZE-img.height*base)/2});
+      setImgEl(img);
+    };
+    img.src = url;
+    return ()=>{ cancelled=true; URL.revokeObjectURL(url); };
+  },[file]);
+
+  const clamp = (off, scale) => {
+    if(!imgEl) return off;
+    const w = imgEl.width*scale, h = imgEl.height*scale;
+    return {
+      x: Math.min(0, Math.max(SIZE-w, off.x)),
+      y: Math.min(0, Math.max(SIZE-h, off.y))
+    };
+  };
+  const scale = baseScale*zoom;
+
+  const start = (e) => { const p=e.touches?e.touches[0]:e; dragRef.current={sx:p.clientX,sy:p.clientY,ox:offset.x,oy:offset.y}; };
+  const move = (e) => {
+    if(!dragRef.current) return;
+    const p=e.touches?e.touches[0]:e;
+    setOffset(clamp({x:dragRef.current.ox+(p.clientX-dragRef.current.sx), y:dragRef.current.oy+(p.clientY-dragRef.current.sy)}, scale));
+  };
+  const stop = () => { dragRef.current=null; };
+
+  const handleZoom = (nz) => {
+    nz = Math.max(1, Math.min(3, nz));
+    const ns = baseScale*nz;
+    const relX = (SIZE/2 - offset.x)/scale, relY = (SIZE/2 - offset.y)/scale;
+    setZoom(nz);
+    setOffset(clamp({x:SIZE/2-relX*ns, y:SIZE/2-relY*ns}, ns));
+  };
+
+  const handleSave = () => {
+    if(!imgEl) return;
+    const OUT=320;
+    const c=document.createElement("canvas"); c.width=OUT; c.height=OUT;
+    const ctx=c.getContext("2d");
+    ctx.drawImage(imgEl, -offset.x/scale, -offset.y/scale, SIZE/scale, SIZE/scale, 0, 0, OUT, OUT);
+    onConfirm(c.toDataURL("image/jpeg",0.85));
+  };
+
+  return (
+    <div className="rest-overlay" onClick={onCancel}>
+      <div className="rest-box" style={{width:"92%",maxWidth:340,padding:20,textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+        <div className="rest-label" style={{marginBottom:14}}>AJUSTÁ TU FOTO</div>
+        <div
+          style={{width:SIZE,height:SIZE,borderRadius:"50%",overflow:"hidden",margin:"0 auto",position:"relative",background:"#000",border:"2px solid var(--gold)",cursor:imgEl?"grab":"default",touchAction:"none"}}
+          onMouseDown={start} onMouseMove={move} onMouseUp={stop} onMouseLeave={stop}
+          onTouchStart={start} onTouchMove={move} onTouchEnd={stop}
+        >
+          {imgEl && (
+            <img src={imgEl.src} draggable={false} alt="" style={{
+              position:"absolute", left:0, top:0,
+              width:imgEl.width*scale, height:imgEl.height*scale,
+              transform:`translate(${offset.x}px, ${offset.y}px)`,
+              userSelect:"none", pointerEvents:"none"
+            }}/>
+          )}
+        </div>
+        <p style={{fontSize:11.5,color:"var(--text3)",margin:"10px 0 4px"}}>Arrastrá para mover · deslizá para acercar</p>
+        <input type="range" min={1} max={3} step={0.01} value={zoom} onChange={e=>handleZoom(parseFloat(e.target.value))} style={{width:"100%"}}/>
+        <div style={{display:"flex",gap:8,marginTop:16}}>
+          <button className="login-cancel" style={{flex:1,margin:0}} onClick={onCancel}>Cancelar</button>
+          <button className="login-btn" style={{flex:1}} disabled={!imgEl} onClick={handleSave}>Guardar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function compressImage(file, maxSize=96, q=0.6) {
   return new Promise(async (res,rej) => {
     try {
@@ -888,6 +975,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const [namePopupError, setNamePopupError] = useState("");
   const namePopupCheckedRef = useRef(null);
   const photoRef = useRef(null);
+  const [cropFile, setCropFile] = useState(null);
   const restRef = useRef(null);
 
   useEffect(()=>{
@@ -1797,30 +1885,30 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                     <div style={{display:"flex",gap:8}}>
                       <button style={{background:"none",border:"1px solid var(--border)",color:"var(--text2)",borderRadius:6,padding:"5px 10px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6}} onClick={()=>photoRef.current.click()}><IconCamera/> Cambiar foto</button>
                       {photos[selected.id]&&(
-                        <button style={{background:"none",border:"1px solid var(--border)",color:"#ff5c5c",borderRadius:6,padding:"5px 10px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6}} onClick={()=>{
+                        <button style={{background:"none",border:"1px solid var(--border)",color:"#ff5c5c",borderRadius:6,padding:"5px 10px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6}} onClick={async()=>{
                           const p={...photos}; delete p[selected.id];
                           setPhotos(p); saveData(KEYS.photos,p);
-                          db.updateUser(selected.id,{photo:null}).catch(e=>console.error('No se pudo borrar la foto en el servidor',e));
-                          setSettingsMsg("✓ Foto eliminada");
+                          const res=await db.updateUser(selected.id,{photo:null}).catch(e=>{console.error('No se pudo borrar la foto en el servidor',e);return null;});
+                          setSettingsMsg(Array.isArray(res)&&res.length?"✓ Foto eliminada":"⚠️ Se borró en este dispositivo pero no en el servidor — revisá la conexión");
                         }}><IconTrash/> Eliminar</button>
                       )}
                     </div>
                   </div>
-                  <input ref={photoRef} type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{
+                  <input ref={photoRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>{
                     const file=e.target.files[0]; if(!file) return;
-                    try {
-                      const url=await compressImage(file);
-                      const p={...photos,[selected.id]:url};
-                      setPhotos(p); saveData(KEYS.photos,p);
-                      db.updateUser(selected.id,{photo:url}).catch(e=>console.error('No se pudo guardar la foto en el servidor',e));
-                      setSettingsMsg("✓ Foto actualizada");
-                    } catch(err){
-                      console.error('Error al procesar la foto', err);
-                      setSettingsMsg(`No se pudo usar esa foto (${err&&err.message?err.message:"error desconocido"}). Probá con otra o revisá tu conexión.`);
-                    }
+                    setCropFile(file);
                     e.target.value="";
                   }}/>
                 </div>
+                {cropFile&&(
+                  <PhotoCropModal file={cropFile} onCancel={()=>setCropFile(null)} onConfirm={async(url)=>{
+                    setCropFile(null);
+                    const p={...photos,[selected.id]:url};
+                    setPhotos(p); saveData(KEYS.photos,p);
+                    const res=await db.updateUser(selected.id,{photo:url}).catch(e=>{console.error('No se pudo guardar la foto en el servidor',e);return null;});
+                    setSettingsMsg(Array.isArray(res)&&res.length?"✓ Foto actualizada":"⚠️ Se guardó en este dispositivo pero no en el servidor — revisá la conexión");
+                  }}/>
+                )}
                 <div style={{marginBottom:14}}>
                   <label style={{fontSize:11.5,color:"var(--text3)",letterSpacing:.5,textTransform:"uppercase",fontWeight:600,display:"block",marginBottom:6}}>Identificación</label>
                   {!editingDisplayName?(
@@ -1981,19 +2069,22 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
 
 function PhotoUploadBtn({ userId, currentPhoto, onSave }) {
   const fileRef=useRef();
-  const [loading,setLoading]=useState(false);
-  const handleFile=async(e)=>{
+  const [cropFile,setCropFile]=useState(null);
+  const handleFile=(e)=>{
     const file=e.target.files[0]; if(!file) return;
-    setLoading(true);
-    try{ onSave(userId,await compressImage(file)); }
-    catch(err){ console.error('Error al procesar la foto', err); alert('No se pudo usar esa foto. Probá con otra.'); }
-    setLoading(false); e.target.value="";
+    setCropFile(file);
+    e.target.value="";
   };
   return(
     <div className="photo-upload-btn tap-effect" onClick={()=>fileRef.current.click()} title="Cambiar foto">
       {currentPhoto?<img src={currentPhoto} className="uc-photo-img" alt=""/>:<span className="uc-photo-icon"><IconUser/></span>}
-      <span className="photo-overlay">{loading?"…":<IconCamera/>}</span>
+      <span className="photo-overlay"><IconCamera/></span>
       <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleFile}/>
+      {cropFile&&(
+        <div onClick={e=>e.stopPropagation()}>
+          <PhotoCropModal file={cropFile} onCancel={()=>setCropFile(null)} onConfirm={(url)=>{ setCropFile(null); onSave(userId,url); }}/>
+        </div>
+      )}
     </div>
   );
 }
@@ -2354,7 +2445,11 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
     const p={...photos}; delete p[id]; setPhotos(p); saveData(KEYS.photos,p);
     setConfirmDelete(null);
   };
-  const savePhoto=(uid,url)=>{ const p={...photos,[uid]:url}; setPhotos(p); saveData(KEYS.photos,p); db.updateUser(uid,{photo:url}).catch(e=>console.error('No se pudo guardar la foto en el servidor',e)); };
+  const savePhoto=async(uid,url)=>{
+    const p={...photos,[uid]:url}; setPhotos(p); saveData(KEYS.photos,p);
+    const res=await db.updateUser(uid,{photo:url}).catch(e=>{console.error('No se pudo guardar la foto en el servidor',e);return null;});
+    if(!Array.isArray(res)||!res.length) alert('La foto se guardó en este dispositivo pero no en el servidor (revisá la conexión o los permisos de Supabase)');
+  };
   const startNewRoutine=(user)=>{
     setEditRoutine({ userId:user.id, name:user.name, days: user.days&&user.days.length?user.days:[{ day:"Lunes", blocks:[mkWarmup()] }], driveFileId:user.driveFileId||null });
     setEditDayIdx(0);

@@ -807,12 +807,22 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     return now<inicio || now>fin;
   })();
   const [showTurnos, setShowTurnos] = useState(false);
+  const turnosBoxRef = useRef(null);
   const turnosFaltan = MAX_DIAS_SEMANA - misReservas.length;
   const turnosIncompletos = !!selected && !turnosLoading && turnosFaltan>0;
   const cerrarTurnos = async()=>{
     if(selected){ await saveData(`gg_turnos_popup_${selected.id}_${getWeekKey()}`, true); }
     setShowTurnos(false);
   };
+  const prevTurnosIncompletosRef = useRef(turnosIncompletos);
+  useEffect(()=>{
+    // Se acaba de completar el 3er día (pasó de "incompleto" a "completo") con el popup abierto:
+    // bajamos el scroll para que el botón de Finalizar quede a la vista.
+    if(showTurnos && prevTurnosIncompletosRef.current && !turnosIncompletos){
+      setTimeout(()=>{ turnosBoxRef.current?.scrollTo({top:turnosBoxRef.current.scrollHeight, behavior:"smooth"}); },150);
+    }
+    prevTurnosIncompletosRef.current = turnosIncompletos;
+  },[turnosIncompletos, showTurnos]);
   useEffect(()=>{
     if(!turnosHabilitado || turnosLoading) return;
     (async()=>{
@@ -827,6 +837,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const autoBioTriedRef = useRef(null);
   const [loginUser, setLoginUser] = useState("");
   const [loginUsername, setLoginUsername] = useState("");
+  const [loginDisplayName, setLoginDisplayName] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginPass2, setLoginPass2] = useState("");
   const [showLoginPass, setShowLoginPass] = useState(false);
@@ -842,6 +853,18 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const [biometricRegistered, setBiometricRegistered] = useState(false);
   const [biometricAsked, setBiometricAsked] = useState(false);
   const [showBiometricPrompt, setShowBiometricPrompt] = useState(false);
+  const autoRememberTriedRef = useRef(null);
+  useEffect(()=>{
+    if(loginFlow?.mode==='login' && autoRememberTriedRef.current!==loginFlow.user.id){
+      autoRememberTriedRef.current = loginFlow.user.id;
+      loadData('gg_remembered', null).then(rec=>{
+        if(rec && rec.userId===loginFlow.user.id && rec.pin===loginFlow.user.pin){
+          setLoginPass(rec.pin); // precompleta el PIN; sigue haciendo falta tocar "Entrar" (o Face ID)
+        }
+      });
+    }
+    if(!loginFlow) autoRememberTriedRef.current = null;
+  },[loginFlow]);
   useEffect(()=>{
     if(loginFlow?.mode==='login' && biometricRegistered && biometricAvailable && autoBioTriedRef.current!==loginFlow.user.id){
       autoBioTriedRef.current = loginFlow.user.id;
@@ -855,9 +878,14 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const [newPass2, setNewPass2] = useState("");
   const [newPass3, setNewPass3] = useState("");
   const [settingsMsg, setSettingsMsg] = useState("");
+  const [settingsDisplayName, setSettingsDisplayName] = useState("");
   const [showNovedadPopup, setShowNovedadPopup] = useState(false);
   const [novedadPopupText, setNovedadPopupText] = useState("");
   const novedadCheckedRef = useRef(false);
+  const [showNamePopup, setShowNamePopup] = useState(false);
+  const [namePopupValue, setNamePopupValue] = useState("");
+  const [namePopupError, setNamePopupError] = useState("");
+  const namePopupCheckedRef = useRef(null);
   const photoRef = useRef(null);
   const restRef = useRef(null);
 
@@ -882,6 +910,20 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
       }
     });
   },[gymInfo]);
+
+  useEffect(()=>{
+    if(showSettings && selected) setSettingsDisplayName(selected.displayName||"");
+  },[showSettings, selected?.id]);
+
+  // Cuentas que ya existían antes de pedir nombre y apellido: mostrar el aviso una sola vez.
+  useEffect(()=>{
+    if(!selected || namePopupCheckedRef.current===selected.id) return;
+    if(selected.displayName) return; // ya lo completó
+    namePopupCheckedRef.current = selected.id;
+    loadData(`gg_name_popup_seen_${selected.id}`, false).then(seen=>{
+      if(!seen) setShowNamePopup(true);
+    });
+  },[selected]);
 
   useEffect(()=>{
     // Check if WebAuthn is available
@@ -1009,6 +1051,9 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     if(!deviceUser){ setDeviceUser(u); saveData(KEYS.device,u); }
     // Save session. Si "remember" está tildado, la sesión no vence; si no, se mantiene la ventana de 3hs
     saveData('gg_session', {userId: u.id, ts: Date.now(), remember: !!remember});
+    // Guardado aparte y persistente (no lo borra "Salir"): si está tildado, la próxima vez
+    // que aparezca la pantalla de login para este usuario, entra solo sin pedir el PIN.
+    saveData('gg_remembered', remember ? {userId: u.id, pin: u.pin} : null);
     // First-ever login: this becomes Día/Semana 1 for this member
     if(!u.startDate){
       const start=todayKey();
@@ -1029,6 +1074,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const unlinkDevice=()=>{
     setDeviceUser(null);
     saveData(KEYS.device,null);
+    saveData('gg_remembered',null);
     setSelected(null);setLoginFlow(null);setLoginPass("");setLoginError("");setDone({});
   };
   const strToUint8 = s => new TextEncoder().encode(s);
@@ -1216,6 +1262,44 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
           </div>
         </div>
       )}
+      {showNamePopup&&selected&&(
+        <div className="rest-overlay" onClick={()=>{}}>
+          <div className="rest-box" style={{width:"90%",maxWidth:340,padding:22,textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:34,marginBottom:8}}>🏆</div>
+            <div className="rest-label" style={{margin:"0 0 10px"}}>COMPLETÁ TU NOMBRE</div>
+            <p style={{fontSize:13.5,color:"var(--text2)",lineHeight:1.5,marginBottom:16}}>
+              Para que aparezcas bien identificado en el Top Entrenamientos, escribí tu nombre y apellido completos.
+            </p>
+            <input className="login-input" placeholder="Nombre y apellido" value={namePopupValue}
+              onChange={e=>{setNamePopupValue(e.target.value);setNamePopupError("");}} autoFocus/>
+            {namePopupError&&<p className="login-error">{namePopupError}</p>}
+            <button className="login-btn" style={{marginTop:12}} onClick={async()=>{
+              const dname=namePopupValue.trim();
+              if(!dname||dname.split(/\s+/).length<2){setNamePopupError("Escribí tu nombre y apellido completos");return;}
+              try{
+                const resp=await fetch(`${SUPA_URL}/rest/v1/users?id=eq.${selected.id}`,{
+                  method:"PATCH",
+                  headers:{apikey:SUPA_KEY,Authorization:`Bearer ${SUPA_KEY}`,"Content-Type":"application/json",Prefer:"return=representation"},
+                  body:JSON.stringify({display_name:dname})
+                });
+                if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+              } catch(e){
+                console.error("No se pudo guardar el nombre completo",e);
+                setNamePopupError("No se pudo guardar, probá de nuevo");
+                return;
+              }
+              setUsers(us=>us.map(x=>x.id===selected.id?{...x,displayName:dname}:x));
+              setSelected(s=>s?{...s,displayName:dname}:s);
+              await saveData(`gg_name_popup_seen_${selected.id}`, true);
+              setShowNamePopup(false);
+            }}>Guardar</button>
+            <button className="login-cancel" onClick={async()=>{
+              await saveData(`gg_name_popup_seen_${selected.id}`, true);
+              setShowNamePopup(false);
+            }}>Completar después</button>
+          </div>
+        </div>
+      )}
       {entering&&<div className="login-fade-overlay"/>}
 
       <div className={`member-hero${selected?" member-hero--active":""}`}>
@@ -1328,6 +1412,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               {unregistered.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
             <input className="login-input" placeholder="Elegí un usuario" value={loginUsername} onChange={e=>{setLoginUsername(e.target.value.replace(/\s/g,""));setLoginError("");}} style={{marginTop:10}}/>
+            <input className="login-input" placeholder="Nombre y apellido (para el Top Entrenamientos)" value={loginDisplayName} onChange={e=>{setLoginDisplayName(e.target.value);setLoginError("");}} style={{marginTop:10}}/>
             <div className="pw-wrap" style={{marginTop:10}}>
               <input className="login-input" type={showRegPass?"text":"password"} inputMode="numeric" placeholder="Elegí 4 dígitos" maxLength={4}
                 value={loginPass} onChange={e=>{setLoginPass(e.target.value.replace(/\D/g,"").slice(0,4));setLoginError("");}}/>
@@ -1344,6 +1429,8 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               const uname=loginUsername.trim().toLowerCase();
               if(!uname){setLoginError("Elegí un usuario");return;}
               if(users.some(x=>x.username && x.username.toLowerCase()===uname)){setLoginError("Ese usuario ya está en uso, elegí otro");return;}
+              const dname=loginDisplayName.trim();
+              if(!dname||dname.split(/\s+/).length<2){setLoginError("Escribí tu nombre y apellido completos");return;}
               if(loginPass.length!==4){setLoginError("Ingresá exactamente 4 dígitos");return;}
               if(loginPass!==loginPass2){setLoginError("Las contraseñas no coinciden");return;}
               const uid=isNaN(loginUser)?loginUser:Number(loginUser);
@@ -1353,7 +1440,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                 const resp = await fetch(`${SUPA_URL}/rest/v1/users?id=eq.${uid}`, {
                   method:"PATCH",
                   headers:{ apikey: SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}`, "Content-Type":"application/json", Prefer:"return=representation" },
-                  body: JSON.stringify({pin: loginPass, username: uname})
+                  body: JSON.stringify({pin: loginPass, username: uname, display_name: dname})
                 });
                 const rawText = await resp.text();
                 if(!resp.ok) throw new Error(`HTTP ${resp.status}: ${rawText.slice(0,300)}`);
@@ -1367,10 +1454,10 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                 setLoginError("No se pudo crear la cuenta. Revisá tu conexión y probá de nuevo.");
                 return;
               }
-              setUsers(us=>us.map(x=>x.id===uid?{...x,pin:loginPass,username:uname}:x));
-              doLogin({...u, pin:loginPass, username:uname});
+              setUsers(us=>us.map(x=>x.id===uid?{...x,pin:loginPass,username:uname,displayName:dname}:x));
+              doLogin({...u, pin:loginPass, username:uname, displayName:dname});
             }}>Crear cuenta</button>
-            <button className="login-cancel" onClick={()=>{setLoginFlow(null);setLoginPass("");setLoginPass2("");setLoginUser("");setLoginUsername("");setLoginError("");}}>Cancelar</button>
+            <button className="login-cancel" onClick={()=>{setLoginFlow(null);setLoginPass("");setLoginPass2("");setLoginUser("");setLoginUsername("");setLoginDisplayName("");setLoginError("");}}>Cancelar</button>
           </div>
         );
       })()}
@@ -1411,7 +1498,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
           .map(u=>{
             const log = weekLog[u.id]||{};
             const count = Object.values(log).filter(Boolean).length;
-            return {id:u.id, name:u.name, count};
+            return {id:u.id, name:u.displayName||u.name, mostrarFoto:u.mostrarFoto!==false, count};
           })
           .filter(u=>u.count>0)
           .sort((a,b)=>b.count-a.count)
@@ -1427,8 +1514,13 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               <div style={{padding:"16px 14px",textAlign:"center",fontSize:13,color:"var(--text3)"}}>Todavía no hay entrenamientos esta semana</div>
             )}
             {scores.map((u,i)=>(
-              <div key={u.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",borderBottom:i<scores.length-1?"1px solid var(--border)":"none"}}>
+              <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderBottom:i<scores.length-1?"1px solid var(--border)":"none"}}>
                 <span style={{fontSize:18,width:28,textAlign:"center"}}>{medals[i]}</span>
+                {u.mostrarFoto&&photos[u.id]?(
+                  <img src={photos[u.id]} alt="" style={{width:26,height:26,borderRadius:"50%",objectFit:"cover",flexShrink:0}}/>
+                ):(
+                  <span style={{width:26,height:26,borderRadius:"50%",background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,color:"var(--text3)"}}><IconUser/></span>
+                )}
                 <span style={{flex:1,fontSize:14,fontWeight:600,color:i===0?"var(--gold)":"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{u.name}</span>
                 <span style={{fontSize:13,color:"var(--text3)",fontWeight:600}}>{u.count} {u.count===1?"día":"días"}</span>
               </div>
@@ -1472,7 +1564,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                 No sé mi usuario — buscar mi nombre en la lista
               </button>
               {users.filter(u=>u.active!==false&&!u.pin).length>0&&(
-                <button className="member-list-add" style={{borderTop:"1px dashed var(--border)",paddingTop:14,marginTop:6}} onClick={()=>{setLoginFlow({mode:'register'});setLoginPass("");setLoginPass2("");setLoginUser("");setLoginUsername("");setLoginError("");}}>
+                <button className="member-list-add" style={{borderTop:"1px dashed var(--border)",paddingTop:14,marginTop:6}} onClick={()=>{setLoginFlow({mode:'register'});setLoginPass("");setLoginPass2("");setLoginUser("");setLoginUsername("");setLoginDisplayName("");setLoginError("");}}>
                   <span className="ml-add-icon">+</span>
                   <span className="ml-add-txt">Soy nuevo — crear cuenta</span>
                 </button>
@@ -1506,7 +1598,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
             );
           })}
           {users.filter(u=>u.active!==false&&!u.pin).length>0&&(
-            <button className="member-list-add" onClick={()=>{setLoginFlow({mode:'register'});setLoginPass("");setLoginPass2("");setLoginUser("");setLoginError("");}}>
+            <button className="member-list-add" onClick={()=>{setLoginFlow({mode:'register'});setLoginPass("");setLoginPass2("");setLoginUser("");setLoginDisplayName("");setLoginError("");}}>
               <span className="ml-add-icon">+</span>
               <span className="ml-add-txt">Soy nuevo — crear cuenta</span>
             </button>
@@ -1616,7 +1708,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
 
       {showTurnos&&turnosHabilitado&&(
         <div className="rest-overlay" onClick={cerrarTurnos}>
-          <div className="rest-box" style={{width:"92%",maxWidth:420,padding:18,maxHeight:"82vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+          <div ref={turnosBoxRef} className="rest-box" style={{width:"92%",maxWidth:420,padding:18,maxHeight:"82vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
               <div className="rest-label" style={{margin:0}}>{turnosIncompletos?"ELEGÍ TUS DÍAS":"GG CALENDAR"}</div>
               <button style={{background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:20,lineHeight:1}} onClick={cerrarTurnos}>✕</button>
@@ -1670,6 +1762,9 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               </div>
             )}
             {turnosMsg&&<p style={{textAlign:"center",color:"var(--gold)",fontSize:13,marginTop:14}}>{turnosMsg}</p>}
+            {!turnosIncompletos&&!turnosLoading&&(
+              <button className="login-btn" style={{marginTop:16}} onClick={cerrarTurnos}>✓ Finalizar selección</button>
+            )}
           </div>
         </div>
       )}
@@ -1723,6 +1818,51 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                     e.target.value="";
                   }}/>
                 </div>
+                <div style={{marginBottom:14}}>
+                  <label style={{fontSize:11.5,color:"var(--text3)",letterSpacing:.5,textTransform:"uppercase",fontWeight:600,display:"block",marginBottom:6}}>Nombre y apellido (Top Entrenamientos)</label>
+                  <div style={{display:"flex",gap:6}}>
+                    <input className="login-input" style={{flex:1}} value={settingsDisplayName} onChange={e=>setSettingsDisplayName(e.target.value)} placeholder="Nombre y apellido"/>
+                    <button style={{background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--gold)",borderRadius:8,padding:"0 14px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={async()=>{
+                      const dname=settingsDisplayName.trim();
+                      if(!dname||dname.split(/\s+/).length<2){setSettingsMsg("Escribí tu nombre y apellido completos");return;}
+                      try{
+                        const resp=await fetch(`${SUPA_URL}/rest/v1/users?id=eq.${selected.id}`,{
+                          method:"PATCH",
+                          headers:{apikey:SUPA_KEY,Authorization:`Bearer ${SUPA_KEY}`,"Content-Type":"application/json",Prefer:"return=representation"},
+                          body:JSON.stringify({display_name:dname})
+                        });
+                        if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                      } catch(e){
+                        console.error("No se pudo guardar el nombre completo",e);
+                        setSettingsMsg("No se pudo guardar, probá de nuevo");
+                        return;
+                      }
+                      setUsers(us=>us.map(x=>x.id===selected.id?{...x,displayName:dname}:x));
+                      setSelected(s=>s?{...s,displayName:dname}:s);
+                      setSettingsMsg("✓ Nombre actualizado");
+                    }}>Guardar</button>
+                  </div>
+                </div>
+                <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:"var(--text2)",marginBottom:14,cursor:"pointer"}}>
+                  <input type="checkbox" checked={selected.mostrarFoto!==false} style={{width:16,height:16}} onChange={async e=>{
+                    const val=e.target.checked;
+                    try{
+                      const resp=await fetch(`${SUPA_URL}/rest/v1/users?id=eq.${selected.id}`,{
+                        method:"PATCH",
+                        headers:{apikey:SUPA_KEY,Authorization:`Bearer ${SUPA_KEY}`,"Content-Type":"application/json",Prefer:"return=representation"},
+                        body:JSON.stringify({mostrar_foto:val})
+                      });
+                      if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    } catch(err){
+                      console.error("No se pudo guardar la preferencia de foto",err);
+                      setSettingsMsg("No se pudo guardar, probá de nuevo");
+                      return;
+                    }
+                    setUsers(us=>us.map(x=>x.id===selected.id?{...x,mostrarFoto:val}:x));
+                    setSelected(s=>s?{...s,mostrarFoto:val}:s);
+                  }}/>
+                  Mostrar mi foto en el Top Entrenamientos
+                </label>
                 <button style={{width:"100%",padding:"12px 16px",background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--text)",borderRadius:10,cursor:"pointer",fontSize:14,fontWeight:600,textAlign:"left",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}} onClick={()=>{setSettingsView("password");setSettingsMsg("");}}>
                   <span>🔑 Cambiar contraseña</span><span style={{color:"var(--text3)"}}>›</span>
                 </button>
@@ -2851,7 +2991,8 @@ function AppInner() {
         ]);
         setUsers(supaUsers?.length ? supaUsers.map(u=>({
           id: u.id, name: u.name, active: u.active, cuota: u.cuota,
-          photo: u.photo, startDate: u.start_date, days: u.days||[], driveFileId: u.drive_file_id, pin: u.pin, username: u.username
+          photo: u.photo, startDate: u.start_date, days: u.days||[], driveFileId: u.drive_file_id, pin: u.pin, username: u.username,
+          displayName: u.display_name, mostrarFoto: u.mostrar_foto!==false
         })) : defaultUsers);
         setGymInfo(supaGymInfo || {});
       } catch(e) {

@@ -879,6 +879,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const [newPass3, setNewPass3] = useState("");
   const [settingsMsg, setSettingsMsg] = useState("");
   const [settingsDisplayName, setSettingsDisplayName] = useState("");
+  const [editingDisplayName, setEditingDisplayName] = useState(false);
   const [showNovedadPopup, setShowNovedadPopup] = useState(false);
   const [novedadPopupText, setNovedadPopupText] = useState("");
   const novedadCheckedRef = useRef(false);
@@ -912,7 +913,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   },[gymInfo]);
 
   useEffect(()=>{
-    if(showSettings && selected) setSettingsDisplayName(selected.displayName||"");
+    if(showSettings && selected){ setSettingsDisplayName(selected.displayName||""); setEditingDisplayName(false); }
   },[showSettings, selected?.id]);
 
   // Cuentas que ya existían antes de pedir nombre y apellido: mostrar el aviso una sola vez.
@@ -1799,6 +1800,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                         <button style={{background:"none",border:"1px solid var(--border)",color:"#ff5c5c",borderRadius:6,padding:"5px 10px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6}} onClick={()=>{
                           const p={...photos}; delete p[selected.id];
                           setPhotos(p); saveData(KEYS.photos,p);
+                          db.updateUser(selected.id,{photo:null}).catch(e=>console.error('No se pudo borrar la foto en el servidor',e));
                           setSettingsMsg("✓ Foto eliminada");
                         }}><IconTrash/> Eliminar</button>
                       )}
@@ -1810,6 +1812,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                       const url=await compressImage(file);
                       const p={...photos,[selected.id]:url};
                       setPhotos(p); saveData(KEYS.photos,p);
+                      db.updateUser(selected.id,{photo:url}).catch(e=>console.error('No se pudo guardar la foto en el servidor',e));
                       setSettingsMsg("✓ Foto actualizada");
                     } catch(err){
                       console.error('Error al procesar la foto', err);
@@ -1819,29 +1822,37 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                   }}/>
                 </div>
                 <div style={{marginBottom:14}}>
-                  <label style={{fontSize:11.5,color:"var(--text3)",letterSpacing:.5,textTransform:"uppercase",fontWeight:600,display:"block",marginBottom:6}}>Nombre y apellido (Top Entrenamientos)</label>
-                  <div style={{display:"flex",gap:6}}>
-                    <input className="login-input" style={{flex:1}} value={settingsDisplayName} onChange={e=>setSettingsDisplayName(e.target.value)} placeholder="Nombre y apellido"/>
-                    <button style={{background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--gold)",borderRadius:8,padding:"0 14px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={async()=>{
-                      const dname=settingsDisplayName.trim();
-                      if(!dname||dname.split(/\s+/).length<2){setSettingsMsg("Escribí tu nombre y apellido completos");return;}
-                      try{
-                        const resp=await fetch(`${SUPA_URL}/rest/v1/users?id=eq.${selected.id}`,{
-                          method:"PATCH",
-                          headers:{apikey:SUPA_KEY,Authorization:`Bearer ${SUPA_KEY}`,"Content-Type":"application/json",Prefer:"return=representation"},
-                          body:JSON.stringify({display_name:dname})
-                        });
-                        if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                      } catch(e){
-                        console.error("No se pudo guardar el nombre completo",e);
-                        setSettingsMsg("No se pudo guardar, probá de nuevo");
-                        return;
-                      }
-                      setUsers(us=>us.map(x=>x.id===selected.id?{...x,displayName:dname}:x));
-                      setSelected(s=>s?{...s,displayName:dname}:s);
-                      setSettingsMsg("✓ Nombre actualizado");
-                    }}>Guardar</button>
-                  </div>
+                  <label style={{fontSize:11.5,color:"var(--text3)",letterSpacing:.5,textTransform:"uppercase",fontWeight:600,display:"block",marginBottom:6}}>Identificación</label>
+                  {!editingDisplayName?(
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 12px"}}>
+                      <span style={{fontSize:14,fontWeight:600}}>{selected.displayName||"Sin completar"}</span>
+                      <button style={{background:"none",border:"none",color:"var(--gold)",fontSize:12.5,fontWeight:700,cursor:"pointer"}} onClick={()=>setEditingDisplayName(true)}>Editar</button>
+                    </div>
+                  ):(
+                    <div style={{display:"flex",gap:6}}>
+                      <input className="login-input" style={{flex:1}} value={settingsDisplayName} onChange={e=>setSettingsDisplayName(e.target.value)} placeholder="Nombre y apellido" autoFocus/>
+                      <button style={{background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--gold)",borderRadius:8,padding:"0 14px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={async()=>{
+                        const dname=settingsDisplayName.trim();
+                        if(!dname||dname.split(/\s+/).length<2){setSettingsMsg("Escribí tu nombre y apellido completos");return;}
+                        try{
+                          const resp=await fetch(`${SUPA_URL}/rest/v1/users?id=eq.${selected.id}`,{
+                            method:"PATCH",
+                            headers:{apikey:SUPA_KEY,Authorization:`Bearer ${SUPA_KEY}`,"Content-Type":"application/json",Prefer:"return=representation"},
+                            body:JSON.stringify({display_name:dname})
+                          });
+                          if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                        } catch(e){
+                          console.error("No se pudo guardar el nombre completo",e);
+                          setSettingsMsg("No se pudo guardar, probá de nuevo");
+                          return;
+                        }
+                        setUsers(us=>us.map(x=>x.id===selected.id?{...x,displayName:dname}:x));
+                        setSelected(s=>s?{...s,displayName:dname}:s);
+                        setEditingDisplayName(false);
+                        setSettingsMsg("✓ Nombre actualizado");
+                      }}>Guardar</button>
+                    </div>
+                  )}
                 </div>
                 <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:"var(--text2)",marginBottom:14,cursor:"pointer"}}>
                   <input type="checkbox" checked={selected.mostrarFoto!==false} style={{width:16,height:16}} onChange={async e=>{
@@ -1886,37 +1897,6 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                     ⚠️ Biometría no disponible en este dispositivo o navegador
                   </div>
                 )}
-                <div style={{marginTop:6}}>
-                  <div style={{fontSize:11,color:"var(--text3)",letterSpacing:1,textTransform:"uppercase",fontWeight:600,marginBottom:8}}>Historial reciente</div>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                    {(()=>{
-                      const log=trainLog[selected.id]||{};
-                      if(!selected.startDate){
-                        const days=Object.keys(log).filter(k=>log[k]).sort().reverse().slice(0,14);
-                        if(!days.length) return <span style={{fontSize:13,color:"var(--text3)"}}>Sin entrenamientos registrados</span>;
-                        return days.map(d=>(<span key={d} style={{padding:"3px 8px",background:"rgba(62,207,142,0.12)",border:"1px solid rgba(62,207,142,0.3)",borderRadius:6,fontSize:11,color:"var(--green)"}}>{d}</span>));
-                      }
-                      // Show every day since the member's start date, crossing out the ones they missed
-                      const p=n=>String(n).padStart(2,'0');
-                      const start=new Date(selected.startDate+'T00:00:00');
-                      const today=new Date(); today.setHours(0,0,0,0);
-                      const allDays=[];
-                      for(let d=new Date(today); d>=start; d.setDate(d.getDate()-1)){
-                        allDays.push(`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`);
-                      }
-                      const shown=allDays.slice(0,14);
-                      return shown.map(d=>{
-                        const done=!!log[d];
-                        return (
-                          <span key={d} style={done
-                            ?{padding:"3px 8px",background:"rgba(62,207,142,0.12)",border:"1px solid rgba(62,207,142,0.3)",borderRadius:6,fontSize:11,color:"var(--green)"}
-                            :{padding:"3px 8px",background:"rgba(255,255,255,0.03)",border:"1px solid var(--border)",borderRadius:6,fontSize:11,color:"var(--text3)",textDecoration:"line-through"}
-                          }>{d}</span>
-                        );
-                      });
-                    })()}
-                  </div>
-                </div>
                 {settingsMsg&&<p style={{textAlign:"center",fontSize:13,color:"var(--gold)",marginTop:12}}>{settingsMsg}</p>}
               </>
             )}
@@ -2374,7 +2354,7 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
     const p={...photos}; delete p[id]; setPhotos(p); saveData(KEYS.photos,p);
     setConfirmDelete(null);
   };
-  const savePhoto=(uid,url)=>{ const p={...photos,[uid]:url}; setPhotos(p); saveData(KEYS.photos,p); };
+  const savePhoto=(uid,url)=>{ const p={...photos,[uid]:url}; setPhotos(p); saveData(KEYS.photos,p); db.updateUser(uid,{photo:url}).catch(e=>console.error('No se pudo guardar la foto en el servidor',e)); };
   const startNewRoutine=(user)=>{
     setEditRoutine({ userId:user.id, name:user.name, days: user.days&&user.days.length?user.days:[{ day:"Lunes", blocks:[mkWarmup()] }], driveFileId:user.driveFileId||null });
     setEditDayIdx(0);
@@ -2995,12 +2975,19 @@ function AppInner() {
           displayName: u.display_name, mostrarFoto: u.mostrar_foto!==false
         })) : defaultUsers);
         setGymInfo(supaGymInfo || {});
+        // Las fotos ahora viven en Supabase (users.photo) para que se vean en cualquier
+        // dispositivo. El cache local (KEYS.photos) queda solo como fallback/legado.
+        try {
+          const localPhotos = await loadData(KEYS.photos,{});
+          const supaPhotos = Object.fromEntries((supaUsers||[]).filter(u=>u.photo).map(u=>[u.id,u.photo]));
+          setPhotos({...localPhotos, ...supaPhotos});
+        } catch(e) { setPhotos({}); }
       } catch(e) {
         console.error("No se pudo conectar con Supabase, usando datos por defecto.", e);
         setUsers(defaultUsers);
         setGymInfo({});
+        try { setPhotos(await loadData(KEYS.photos,{})); } catch(e2) { setPhotos({}); }
       }
-      try { setPhotos(await loadData(KEYS.photos,{})); } catch(e) { setPhotos({}); }
       setLoaded(true);
     })();
   },[]);

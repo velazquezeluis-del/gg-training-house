@@ -350,6 +350,9 @@ const db = {
   getReservasSemana: (weekKey) => supa(`reservas_turno?week_key=eq.${weekKey}&select=id,user_id,dia_semana,hora`),
   reservarTurno: (data) => supa("reservas_turno?on_conflict=user_id,week_key,dia_semana", {method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=representation"}, body:JSON.stringify(data)}),
   cancelarReserva: (id) => supa(`reservas_turno?id=eq.${id}`, {method:"DELETE"}),
+  getUserProgress: (userId,weekKey) => supa(`progress?user_id=eq.${userId}&week_key=eq.${weekKey}&select=day_index,block_index`),
+  getDaySkips: (userId,weekKey) => supa(`day_skips?user_id=eq.${userId}&week_key=eq.${weekKey}&select=day_index`),
+  skipDay: (data) => supa("day_skips?on_conflict=user_id,week_key,day_index", {method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=representation"}, body:JSON.stringify(data)}),
 };
 
 
@@ -562,6 +565,11 @@ const IconMove=()=><Icon d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 
 
 function todayKey() {
   const d = new Date();
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
+function dateKeyFromTs(ts) {
+  const d = new Date(ts);
   const p = n => String(n).padStart(2,'0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
 }
@@ -793,6 +801,10 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   useEffect(()=>{ onInsideChange?.(!!selected); },[selected]);
   const [activeDay, setActiveDay] = useState(0);
   const [done, setDone] = useState({});
+  const [lastBlockAt, setLastBlockAt] = useState({});
+  const [skippedDays, setSkippedDays] = useState({});
+  const [autoCompletedDays, setAutoCompletedDays] = useState({});
+  const autoCompletedRef = useRef({});
   const getSundayKey=()=>{
     const now=new Date();
     const sunday=new Date(now);
@@ -805,7 +817,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
       (async()=>{
         for(let attempt=1; attempt<=3; attempt++){
           try{
-            const resp = await fetch(`${SUPA_URL}/rest/v1/progress?user_id=eq.${selected.id}&week_key=eq.${getSundayKey()}&select=day_index,block_index`, {
+            const resp = await fetch(`${SUPA_URL}/rest/v1/progress?user_id=eq.${selected.id}&week_key=eq.${getSundayKey()}&select=day_index,block_index,created_at`, {
               headers:{ apikey: SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}` }
             });
             const text = await resp.text();
@@ -820,9 +832,14 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               return; // keep whatever "done" already has instead of wiping it
             }
             const rows = JSON.parse(text);
-            const d={};
-            (rows||[]).forEach(r=>{ d[`${r.day_index}-${r.block_index}`]=true; });
+            const d={}; const lastAt={};
+            (rows||[]).forEach(r=>{
+              d[`${r.day_index}-${r.block_index}`]=true;
+              const t=new Date(r.created_at).getTime();
+              if(!lastAt[r.day_index] || t>lastAt[r.day_index]) lastAt[r.day_index]=t;
+            });
             setDone(d);
+            setLastBlockAt(lastAt);
             return;
           } catch(e){
             if(attempt<3){ await new Promise(r=>setTimeout(r, 1000*attempt)); continue; }
@@ -831,6 +848,14 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
             setTimeout(()=>setGeoError(""),6000);
           }
         }
+      })();
+      (async()=>{
+        try{
+          const rows = await db.getDaySkips(selected.id, getWeekKey());
+          const s={};
+          (rows||[]).forEach(r=>{ s[r.day_index]=true; });
+          setSkippedDays(s);
+        } catch(e){ console.error('No se pudieron cargar los días salteados', e); }
       })();
     }
   },[selected?.id]);
@@ -1096,6 +1121,51 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     }
   },[done]);
 
+  // Si el alumno entrenó, marcó algunos bloques y se olvidó de cerrar el último
+  // (se fue del gym sin tocarlo), lo completamos solos una vez que pasó media
+  // hora desde el último bloque marcado. Buscamos el día "trabado" (el que tiene
+  // algunos bloques hechos pero no todos) en vez de guiarnos por el día de la
+  // semana de hoy — como los días se desbloquean en orden, no por fecha, puede
+  // pasar que el alumno recién vuelva a abrir la app varios días después, en
+  // el próximo día que le toca entrenar, y ahí es cuando más importa que esto
+  // no le bloquee el acceso al día siguiente.
+  useEffect(()=>{
+    if(!selected||!routine) return;
+    let di=-1;
+    for(let i=0;i<routine.days.length;i++){
+      const day=routine.days[i];
+      if(!day.blocks.length) continue;
+      const doneCount=day.blocks.filter((_,bi)=>isBlockDone(i,bi)).length;
+      if(doneCount>0 && doneCount<day.blocks.length){ di=i; break; } // solo puede haber uno trabado a la vez (por el desbloqueo secuencial)
+    }
+    if(di<0) return;
+    const day = routine.days[di];
+    const pendientes = day.blocks.map((_,bi)=>bi).filter(bi=>!isBlockDone(di,bi));
+    const lastAt = lastBlockAt[di];
+    if(!lastAt) return;
+    const MEDIA_HORA = 30*60*1000;
+    if(Date.now()-lastAt < MEDIA_HORA) return;
+    const rkey = `${selected.id}-${getSundayKey()}-${di}`;
+    if(autoCompletedRef.current[rkey]) return;
+    autoCompletedRef.current[rkey]=true;
+    setDone(prev=>{
+      const next={...prev};
+      pendientes.forEach(bi=>{ next[`${di}-${bi}`]=true; });
+      return next;
+    });
+    setAutoCompletedDays(prev=>({...prev,[di]:true}));
+    saveData(`gg_autocompleted_${selected.id}_${getSundayKey()}_${di}`, true);
+    pendientes.forEach(bi=>{
+      fetch(`${SUPA_URL}/rest/v1/progress`, {
+        method:'POST',
+        headers:{ apikey: SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}`, 'Content-Type':'application/json', Prefer:'resolution=merge-duplicates,return=representation' },
+        body: JSON.stringify({user_id:selected.id, week_key:getSundayKey(), day_index:di, block_index:bi})
+      }).catch(e=>console.error('No se pudo guardar el cierre automático del bloque',e));
+    });
+    setGeoError('✓ Se completó automáticamente el último bloque de hoy (pasaron 30+ min sin marcarlo)');
+    setTimeout(()=>setGeoError(""),7000);
+  },[done, lastBlockAt, selected, routine]);
+
   useEffect(()=>{
     if(restTimer&&restTimer.running&&restTimer.remaining>0){
       restRef.current=setInterval(()=>{
@@ -1222,6 +1292,18 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   };
 
   const routine=selected&&selected.days&&selected.days.length?{name:selected.name, days:selected.days}:null;
+
+  useEffect(()=>{
+    if(!selected||!routine) return;
+    (async()=>{
+      const flags={};
+      for(let i=0;i<routine.days.length;i++){
+        const v=await loadData(`gg_autocompleted_${selected.id}_${getSundayKey()}_${i}`, false);
+        if(v) flags[i]=true;
+      }
+      if(Object.keys(flags).length) setAutoCompletedDays(prev=>({...flags,...prev}));
+    })();
+  },[selected?.id, routine?.days?.length]);
   const isDone=(di,bi,ei)=>!!done[key(di,bi,ei)];
   const [geoError, setGeoError] = useState("");
 
@@ -1239,8 +1321,20 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   // reads from `done` (already loaded from Supabase per week) — it never
   // clears or touches progress itself, so a previously-completed day stays
   // completed and doesn't need to be redone.
+  //
+  // On top of that: you can't train two days back-to-back on the same
+  // calendar date (that's basically doing two workouts in one go, which
+  // isn't allowed). The one exception is when the previous day only got
+  // marked done by the "olvidó cerrar el último bloque" auto-complete —
+  // that doesn't count as "trained today" for this rule, so it doesn't
+  // block moving on to the next day the same day it catches up.
   const dayLocked=(di)=>{
-    for(let p=0;p<di;p++){ if(!dayDoneCheck(p)) return true; }
+    for(let p=0;p<di;p++){ if(!dayDoneCheck(p) && !skippedDays[p]) return true; }
+    if(di>0){
+      const prevAt=lastBlockAt[di-1];
+      const prevWasAuto=!!autoCompletedDays[di-1];
+      if(prevAt && !prevWasAuto && dateKeyFromTs(prevAt)===todayKey()) return true;
+    }
     return false;
   };
 
@@ -1296,6 +1390,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
 
   const completBlock=(dayIdx,blockIdx,blockRest)=>{
     setDone(prev=>({...prev,[`${dayIdx}-${blockIdx}`]:true}));
+    setLastBlockAt(prev=>({...prev,[dayIdx]:Date.now()}));
     if(selected){
       (async()=>{
         for(let attempt=1; attempt<=3; attempt++){
@@ -1714,7 +1809,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                     <button key={i} className={`day-tab ${activeDay===i?"active":""} ${dayDoneCheck(i)?"tab-done":""} ${locked?"day-tab-locked":""}`}
                       disabled={locked}
                       onClick={()=>{ if(!locked) setActiveDay(i); }}>
-                      {locked&&<IconLock/>} DÍA {i+1}{dayDoneCheck(i)?" ✓":""}
+                      {locked&&<IconLock/>} DÍA {i+1}{dayDoneCheck(i)?" ✓":skippedDays[i]?" ⏭":""}
                     </button>
                   );
                 })}
@@ -2062,6 +2157,83 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
             <button className="rest-skip" onClick={()=>{clearInterval(restRef.current);setRestTimer(null);}}>Saltar descanso</button>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function WeeklyProgressPanel({ user }) {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const wk = getWeekKey();
+      const [prog, skips] = await Promise.all([
+        db.getUserProgress(user.id, wk),
+        db.getDaySkips(user.id, wk)
+      ]);
+      const doneCount = {};
+      (prog||[]).forEach(r => { doneCount[r.day_index] = (doneCount[r.day_index]||0)+1; });
+      const skippedDays = {};
+      (skips||[]).forEach(r => { skippedDays[r.day_index] = true; });
+      setStatus({ doneCount, skippedDays });
+    } catch(e) { console.error('No se pudo cargar el progreso semanal', e); }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [user.id]);
+
+  if (!user.days || !user.days.length) return null;
+  if (loading || !status) return <div style={{fontSize:12,color:"var(--text3)",padding:"4px 0"}}>Cargando progreso...</div>;
+
+  const dayFullyDone = (di) => {
+    const day = user.days[di];
+    return day.blocks.length>0 && (status.doneCount[di]||0) >= day.blocks.length;
+  };
+
+  // El primer día que no está ni hecho ni salteado es el que está trabando el avance
+  let blockingIdx = -1;
+  for (let i=0;i<user.days.length;i++) {
+    if (!dayFullyDone(i) && !status.skippedDays[i]) { blockingIdx = i; break; }
+  }
+
+  const handleSkip = async (di) => {
+    setBusy(true);
+    try {
+      const res = await db.skipDay({ user_id: user.id, week_key: getWeekKey(), day_index: di });
+      if(!Array.isArray(res) || !res.length){ alert('No se pudo saltear el día (revisá la conexión o permisos de Supabase)'); }
+      await load();
+    } catch(e) { console.error('No se pudo saltear el día', e); alert('No se pudo saltear el día'); }
+    setBusy(false);
+  };
+
+  return (
+    <div className="uc-routine" style={{flexDirection:"column",alignItems:"stretch",gap:8}}>
+      <span className="uc-rlabel">Progreso esta semana:</span>
+      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+        {user.days.map((d,i)=>{
+          const isDone = dayFullyDone(i);
+          const isSkipped = status.skippedDays[i];
+          return (
+            <span key={i} style={{
+              padding:"4px 10px",borderRadius:6,fontSize:11.5,fontWeight:600,
+              background: isDone ? "rgba(62,207,142,0.12)" : isSkipped ? "rgba(245,197,24,0.12)" : "var(--surface2)",
+              border: `1px solid ${isDone?"rgba(62,207,142,0.3)":isSkipped?"rgba(245,197,24,0.35)":"var(--border)"}`,
+              color: isDone?"var(--green)":isSkipped?"var(--gold)":"var(--text3)"
+            }}>
+              Día {i+1} {isDone?"✓":isSkipped?"⏭":""}
+            </span>
+          );
+        })}
+      </div>
+      {blockingIdx>=0 && (
+        <button disabled={busy} onClick={()=>handleSkip(blockingIdx)}
+          style={{background:"var(--surface2)",border:"1px solid var(--gold)",color:"var(--gold)",borderRadius:8,padding:"7px 12px",fontSize:12.5,fontWeight:700,cursor:busy?"default":"pointer",alignSelf:"flex-start",opacity:busy?0.6:1}}>
+          ⏭ Saltear Día {blockingIdx+1} (no cuenta como entrenado)
+        </button>
       )}
     </div>
   );
@@ -2846,6 +3018,7 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
                     <span style={{fontSize:12,color:"var(--text3)"}}>Sin registrar todavía</span>
                   )}
                 </div>
+                <WeeklyProgressPanel user={u}/>
               </div>
             );
           })()}

@@ -1105,6 +1105,20 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     return () => clearInterval(interval);
   },[]);
 
+  const routine=selected&&selected.days&&selected.days.length?{name:selected.name, days:selected.days}:null;
+
+  useEffect(()=>{
+    if(!selected||!routine) return;
+    (async()=>{
+      const flags={};
+      for(let i=0;i<routine.days.length;i++){
+        const v=await loadData(`gg_autocompleted_${selected.id}_${getSundayKey()}_${i}`, false);
+        if(v) flags[i]=true;
+      }
+      if(Object.keys(flags).length) setAutoCompletedDays(prev=>({...flags,...prev}));
+    })();
+  },[selected?.id, routine?.days?.length]);
+
   useEffect(()=>{
     if(!selected||!routine) return;
     const day=routine.days[activeDay];
@@ -1291,19 +1305,6 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
     else setLoginError("Biometría fallida, usá tu PIN");
   };
 
-  const routine=selected&&selected.days&&selected.days.length?{name:selected.name, days:selected.days}:null;
-
-  useEffect(()=>{
-    if(!selected||!routine) return;
-    (async()=>{
-      const flags={};
-      for(let i=0;i<routine.days.length;i++){
-        const v=await loadData(`gg_autocompleted_${selected.id}_${getSundayKey()}_${i}`, false);
-        if(v) flags[i]=true;
-      }
-      if(Object.keys(flags).length) setAutoCompletedDays(prev=>({...flags,...prev}));
-    })();
-  },[selected?.id, routine?.days?.length]);
   const isDone=(di,bi,ei)=>!!done[key(di,bi,ei)];
   const [geoError, setGeoError] = useState("");
 
@@ -1678,7 +1679,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
         // Top 5 leaderboard
         const weekLog = trainLog;
         const scores = users
-          .filter(u=>u.active!==false)
+          .filter(u=>u.active!==false && !u.ocultoTop)
           .map(u=>{
             const log = weekLog[u.id]||{};
             const count = Object.values(log).filter(Boolean).length;
@@ -3005,6 +3006,16 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
                   </button>
                 </div>
                 <div className="uc-routine" style={{justifyContent:"space-between"}}>
+                  <span className="uc-rlabel">Top Entrenamientos:</span>
+                  <button className={`btn-toggle ${!u.ocultoTop?"on":"off"}`} onClick={()=>{
+                    const val=!u.ocultoTop;
+                    setUsers(us=>us.map(x=>x.id===u.id?{...x,ocultoTop:val}:x));
+                    db.updateUser(u.id,{oculto_top:val}).catch(e=>console.error('No se pudo guardar la preferencia de ranking',e));
+                  }} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",fontSize:12,fontWeight:700}}>
+                    {!u.ocultoTop?<><IconCheck/> Participa</>:<><IconX/> Oculto</>}
+                  </button>
+                </div>
+                <div className="uc-routine" style={{justifyContent:"space-between"}}>
                   <span className="uc-rlabel">Usuario:</span>
                   <span style={{fontSize:12,color:"var(--text2)",fontWeight:600}}>{u.username||"Sin definir"}</span>
                 </div>
@@ -3240,7 +3251,7 @@ function AppInner() {
         setUsers(supaUsers?.length ? supaUsers.map(u=>({
           id: u.id, name: u.name, active: u.active, cuota: u.cuota,
           photo: u.photo, startDate: u.start_date, days: u.days||[], driveFileId: u.drive_file_id, pin: u.pin, username: u.username,
-          displayName: u.display_name, mostrarFoto: u.mostrar_foto!==false
+          displayName: u.display_name, mostrarFoto: u.mostrar_foto!==false, ocultoTop: !!u.oculto_top
         })) : defaultUsers);
         setGymInfo(supaGymInfo || {});
         // Las fotos ahora viven en Supabase (users.photo) para que se vean en cualquier

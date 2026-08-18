@@ -641,6 +641,10 @@ function buildGridFromSheet(sheet){
 // touching the sheet's existing structure/formatting/merges at all.
 function driveParseDayBlocks(rows){
   const blocks=[]; let curBlock=null; let hasWeekCols=false; let weekStride=2; let groupStart=0;
+  // Tracks whichever named section (Desarrollo, Activación, Potencia...) most
+  // recently appeared, so that a "BLOQUE UNO/DOS/TRES" divider under it can
+  // be labeled with that context instead of floating on its own.
+  let curSectionName=null;
   for(const {idx,cells} of rows){
     const label=driveRowLabel(cells);
     if(!label) continue;
@@ -704,7 +708,20 @@ function driveParseDayBlocks(rows){
         continue;
       }
       if(curBlock && curBlock.exercises.length===0) blocks.pop(); // drop empty placeholder left by a category-only row (e.g. "Desarrollo")
-      curBlock={name:driveTitleCase(label), type:(upper.includes("MOVILIDAD")||upper.includes("CALENTAMIENTO"))?"warmup":"block", exercises:[]};
+      let blockName=driveTitleCase(label);
+      if(isBloqueDivider && curSectionName){
+        // "BLOQUE UNO/DOS/TRES" are sub-divisions of whatever named section
+        // (Desarrollo, Potencia...) came right before them in the sheet —
+        // carry that context into the name instead of a bare "Bloque Uno"
+        // with no indication of which section it belongs to.
+        blockName=`${curSectionName} - ${blockName}`;
+      } else {
+        // Any other header (a recognized section like "Desarrollo", or an
+        // unrecognized-but-real title) becomes the new "parent" section that
+        // subsequent Bloque dividers will attach to.
+        curSectionName=driveTitleCase(label);
+      }
+      curBlock={name:blockName, type:(upper.includes("MOVILIDAD")||upper.includes("CALENTAMIENTO"))?"warmup":"block", exercises:[]};
       blocks.push(curBlock);
       hasWeekCols = looksLikeHeaderWithWeeks || hasKgCol;
       weekStride = hasSeriesCol ? 3 : 2;

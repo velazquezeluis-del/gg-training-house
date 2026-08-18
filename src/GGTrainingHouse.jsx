@@ -611,12 +611,28 @@ function driveRowLabel(cells){
   for(let i=0;i<Math.min(3,cells.length);i++){ if(cells[i] && cells[i].trim()) return cells[i].trim(); }
   return "";
 }
-// Same scan as driveRowLabel but returns the column index where the label was
-// found, so callers can slice the "rest of the row" starting right after it
-// instead of assuming a fixed offset (rows only have a 1-column label in the
-// current sheet template, but this stays safe if that ever changes).
+// Same scan as driveRowLabel but returns the column index of the LAST column
+// still occupied by the label, so callers can slice the "rest of the row"
+// starting right after it. The label cell can be merged across more than one
+// column — this sheet template merges the label 3 columns wide (matching the
+// width of a per-week REPS/SERIES/KG group), and buildGridFromSheet
+// duplicates a merged cell's value into every column of that merge. Slicing
+// right after a fixed offset (or right after the FIRST non-blank column)
+// left 2 columns of duplicated label text still sitting in "rest", which
+// silently shifted every real data read by 2 — this is why block dividers
+// like "BLOQUE UNO" could show up with garbage reps/series, and why some
+// exercises' kg values came out blank or wrong. Scanning forward while the
+// column still repeats the exact same label text (regardless of how many
+// columns that merge spans) finds the true boundary in every case.
 function driveLabelIndex(cells){
-  for(let i=0;i<Math.min(3,cells.length);i++){ if(cells[i] && cells[i].trim()) return i; }
+  for(let i=0;i<Math.min(3,cells.length);i++){
+    if(cells[i] && cells[i].trim()){
+      const label=cells[i].trim();
+      let j=i;
+      while(j<cells.length && (cells[j]||"").trim()===label) j++;
+      return j-1;
+    }
+  }
   return 0;
 }
 // Turns a Sheets API sheet object ({data:[{rowData}], merges}) into a plain 2D
@@ -674,7 +690,11 @@ function driveParseDayBlocks(rows){
     // "SEMANA 1" text landing on a fixed column index, which this template
     // doesn't do.
     const hasSeriesCol = rest.some(c=>/^SERIES$/i.test((c||"").trim()));
-    const hasKgCol = rest.some(c=>/^KG\/?CM$/i.test((c||"").trim()));
+    // Matches plain "KG" (used by e.g. "Bloque Uno"/"Bloque Tres") as well as
+    // "KG/CM" (used by e.g. "Bloque Dos") — the old regex required the "CM"
+    // suffix, so blocks whose header just says "KG" were never detected as
+    // having a weight column and silently lost their kg values.
+    const hasKgCol = rest.some(c=>/^KG(\/?CM)?$/i.test((c||"").trim()));
     const isSkippable = DRIVE_SKIP_PREFIXES.some(p=>upper.startsWith(p)) || upper.startsWith("INTENSIDAD/CARGA");
     // "BLOQUE UNO"/"BLOQUE DOS"/"BLOQUE TRES" etc. are pure block dividers in
     // the sheet, written out in words (not just digits like "BLOQUE 1"). This

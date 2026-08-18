@@ -672,7 +672,14 @@ function driveParseDayBlocks(rows){
     const hasSeriesCol = rest.some(c=>/^SERIES$/i.test((c||"").trim()));
     const hasKgCol = rest.some(c=>/^KG\/?CM$/i.test((c||"").trim()));
     const isSkippable = DRIVE_SKIP_PREFIXES.some(p=>upper.startsWith(p)) || upper.startsWith("INTENSIDAD/CARGA");
-    if(DRIVE_SECTION_HEADERS.has(upper) || /^BLOQUE\s*\d*$/.test(upper) || (!isSkippable && (looksLikeHeaderWithWeeks || looksLikeColumnHeaderRow || looksLikeBlankHeader))){
+    // "BLOQUE UNO"/"BLOQUE DOS"/"BLOQUE TRES" etc. are pure block dividers in
+    // the sheet, written out in words (not just digits like "BLOQUE 1"). This
+    // must match unconditionally on the label alone — regardless of what's in
+    // the rest of that row (blank, "SEMANA 1...", or "REPS/SERIES/KG...") —
+    // so a "Bloque X" row can never fall through and get recorded as if it
+    // were an exercise with fake reps/series/rpe data.
+    const isBloqueDivider = /^BLOQUE\s*(\d+|UNO|DOS|TRES|CUATRO|CINCO|SEIS|SIETE|OCHO|NUEVE|DIEZ)?$/.test(upper);
+    if(DRIVE_SECTION_HEADERS.has(upper) || isBloqueDivider || (!isSkippable && (looksLikeHeaderWithWeeks || looksLikeColumnHeaderRow || looksLikeBlankHeader))){
       // Recognized name, OR an unrecognized header we've never seen before —
       // exercise rows always have reps/data in the following columns, so a
       // header-only row (blank, or carrying the "SEMANA 1..." week labels,

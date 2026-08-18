@@ -679,6 +679,23 @@ function driveParseDayBlocks(rows){
       // or the literal column headers like "REPS/SERIES/KG") is almost
       // certainly a new section name, not something to merge silently into
       // whatever block came before it.
+      //
+      // BUT: the label itself can be a generic column/week token ("REPS",
+      // "SEMANA 1") rather than an actual block title — this happens when a
+      // titled row like "BLOQUE UNO" is immediately followed by its own
+      // "SEMANA 1..." row and then its own "REPS/SERIES/KG" row (each on a
+      // separate line, unlike "BLOQUE DOS" which carries REPS/SERIES/KG on
+      // the SAME row as its title). If we already opened a block from a real
+      // title and haven't added any exercises yet, these generic follow-up
+      // rows must only refresh the column/week metadata — not overwrite the
+      // real block name with a meaningless one like "Reps".
+      const isGenericHeaderLabel = /^(REPS|SERIES|VUELTAS|TIEMPO|KG\/?CM|SEMANA\s*\d*)$/i.test(upper);
+      if(curBlock && curBlock.exercises.length===0 && isGenericHeaderLabel){
+        hasWeekCols = hasWeekCols || looksLikeHeaderWithWeeks || hasKgCol;
+        if(hasSeriesCol) weekStride = 3;
+        groupStart=0;
+        continue;
+      }
       if(curBlock && curBlock.exercises.length===0) blocks.pop(); // drop empty placeholder left by a category-only row (e.g. "Desarrollo")
       curBlock={name:driveTitleCase(label), type:(upper.includes("MOVILIDAD")||upper.includes("CALENTAMIENTO"))?"warmup":"block", exercises:[]};
       blocks.push(curBlock);

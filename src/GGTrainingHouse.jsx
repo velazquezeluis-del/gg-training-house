@@ -305,13 +305,14 @@ function GGApp() {
 
 const KEYS = { users: "gg_users", routines: "gg_routines", photos: "gg_photos", log: "gg_log", pins: "gg_pins", info: "gg_info", device: "gg_device", weekReset: "gg_week_reset" };
 
-const mkWeek = ()=>({reps:"",kg:""});
-// extraType tells the UI what the exercise's "extra" number (stored in each
-// week's kg field) actually represents: peso en kg (default), tiempo en
-// segundos, or una distancia en cm. Only one of these ever applies per
-// exercise — reps is always present, and this is the single optional
-// second value alongside it.
-const mkEx = (o={}) => ({ name:"", sets:3, measType:"reps", reps:"", secs:"", rest:"60s", notes:"", weeks:[mkWeek(),mkWeek(),mkWeek(),mkWeek()], rpe:["","","",""], extraType:"kg", ...o });
+// Each week can carry up to three independent "extra" values alongside
+// reps — kg (weight), cm (distance/height), and tiempo (a timing value
+// distinct from the exercise's own reps-as-seconds case) — because a
+// coach's sheet can and does fill in more than one of these for the same
+// exercise (e.g. a box step-up logged with both a kg and a box height in
+// cm). Cells the coach never filled in stay "" and simply aren't shown.
+const mkWeek = ()=>({reps:"",kg:"",cm:"",tiempo:""});
+const mkEx = (o={}) => ({ name:"", sets:3, measType:"reps", reps:"", secs:"", rest:"60s", notes:"", weeks:[mkWeek(),mkWeek(),mkWeek(),mkWeek()], rpe:["","","",""], ...o });
 const mkBlock = (type="block", name="") => ({ id: Date.now()+Math.random(), type, name, exercises:[mkEx()] });
 const mkWarmup = () => ({ id: Date.now()+Math.random(), type:"warmup", name:"Entrada en calor / Movilidad", exercises:[mkEx()] });
 // Reads the value for a given program week (1-4), falling back to the old flat
@@ -319,8 +320,8 @@ const mkWarmup = () => ({ id: Date.now()+Math.random(), type:"warmup", name:"Ent
 function getWeekData(ex, weekNum){
   const idx = Math.min(4, Math.max(1, weekNum||1)) - 1;
   const w = ex.weeks && ex.weeks[idx];
-  if(w && (w.reps || w.kg)) return w;
-  return { reps: ex.measType==="secs" ? ex.secs : ex.reps, kg:"" };
+  if(w && (w.reps || w.kg || w.cm || w.tiempo)) return w;
+  return { reps: ex.measType==="secs" ? ex.secs : ex.reps, kg:"", cm:"", tiempo:"" };
 }
 function getWeekRPE(ex, weekNum){
   const idx = Math.min(4, Math.max(1, weekNum||1)) - 1;
@@ -584,8 +585,15 @@ const DRIVE_SECTION_HEADERS = new Set([
   "MOVILIDAD","ACTIVACION","ACTIVACIÓN","CORE Y ACTIVACION","CORE Y ACTIVACIÓN",
   "CORE + ACTIVACION","CORE + ACTIVACIÓN","FUERZA ESTRUCTURA","FUERZA ESPECÍFICA",
   "ACCESORIOS","CIRCUITO FINALIZADOR","CIRCUITO 1","CIRCUITO 2","BLOQUE FINALIZADOR",
-  "ACONDICIONAMIENTO FINAL","CARRERAS POR TIEMPO","CALENTAMIENTO","DESARROLLO","POTENCIA"
+  "ACONDICIONAMIENTO FINAL","CARRERAS POR TIEMPO","CALENTAMIENTO","POTENCIA"
 ]);
+// Pure organizational wrappers: appear as their own row in the sheet but
+// never represent a real block a student should see — "DESARROLLO" just
+// introduces whatever named sub-blocks (Potencia, Fuerza, Estructura...)
+// come after it. Must be skipped outright (like PAUSA), never turned into
+// a block of their own and never adopted as curSectionName, or every
+// exercise under them silently inherited "Desarrollo" as a fake parent.
+const DRIVE_WRAPPER_HEADERS = new Set(["DESARROLLO"]);
 const DRIVE_SKIP_PREFIXES = ["PAUSA","X2 VUELTAS","X3 VUELTAS","X4 VUELTAS","FORMATO","INTENSIDAD/CARGA","OBSERVACIONES","SIN PAUSA"];
 const DRIVE_WEEKDAYS = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
 
@@ -661,7 +669,7 @@ function buildGridFromSheet(sheet){
 // kept around so we can later write values back to the exact same cells without
 // touching the sheet's existing structure/formatting/merges at all.
 function driveParseDayBlocks(rows){
-  const blocks=[]; let curBlock=null; let hasWeekCols=false; let weekStride=2; let groupStart=0;
+  const blocks=[]; let curBlock=null; let hasWeekCols=false; let weekStride=2; let kgOffset=1; let cmOffset=null; let tiempoOffset=null; let groupStart=0;
   // Tracks whichever named section (Desarrollo, Activación, Potencia...) most
   // recently appeared, so that a "BLOQUE UNO/DOS/TRES" divider under it can
   // be labeled with that context instead of floating on its own.
@@ -700,6 +708,41 @@ function driveParseDayBlocks(rows){
     // suffix, so blocks whose header just says "KG" were never detected as
     // having a weight column and silently lost their kg values.
     const hasKgCol = rest.some(c=>/^KG(\/?CM)?$/i.test((c||"").trim()));
+    // Column width and the position of the "extra" value (kg/cm/tiempo)
+    // within each week's group both vary by template: some sheets use 2
+    // columns per week (REPS,KG), others 3 (REPS,SERIES,KG/CM), and others
+    // 5 (REPS,SERIES,KG,CM,TIEMPO) — like this coach's own routine.
+    // Assuming a fixed width, or that the extra value is always the LAST
+    // column, silently misread every value once a template didn't match
+    // those assumptions (kg came out blank, or from the wrong week
+    // entirely). Detecting both straight from this header row — the
+    // distance until the first token (e.g. "REPS") repeats gives the real
+    // width, and scanning within that width for KG/KG-CM/CM/TIEMPO gives
+    // the real offset — works for any width without hardcoding one.
+    const headerTokens = rest.map(c=>(c||"").trim());
+    const detectedStride = (()=>{
+      const firstIdx = headerTokens.findIndex(t=>t);
+      if(firstIdx<0) return null;
+      const first = headerTokens[firstIdx].toUpperCase();
+      for(let j=firstIdx+1;j<headerTokens.length;j++){
+        if(headerTokens[j] && headerTokens[j].toUpperCase()===first) return j-firstIdx;
+      }
+      return null;
+    })();
+    // A sheet can list KG, CM, and TIEMPO as three fully separate columns
+    // within the same week group (this coach's own template does) — a
+    // single exercise can then legitimately have values in more than one
+    // of them at once (e.g. a step-up logged with both a kg and a box
+    // height in cm), so each gets its own independent offset instead of
+    // collapsing to one "extra" slot.
+    const findOffset=(re)=>{
+      if(!detectedStride) return null;
+      for(let k=0;k<detectedStride;k++){ if(re.test((headerTokens[k]||"").toUpperCase())) return k; }
+      return null;
+    };
+    const detectedKgOffset = findOffset(/^KG(\/?CM)?$/);
+    const detectedCmOffset = findOffset(/^CM$/);
+    const detectedTiempoOffset = findOffset(/^TIEMPO$/);
     const isSkippable = DRIVE_SKIP_PREFIXES.some(p=>upper.startsWith(p)) || upper.startsWith("INTENSIDAD/CARGA");
     // "BLOQUE UNO"/"BLOQUE DOS"/"BLOQUE TRES" etc. are pure block dividers in
     // the sheet, written out in words (not just digits like "BLOQUE 1"). This
@@ -708,6 +751,16 @@ function driveParseDayBlocks(rows){
     // so a "Bloque X" row can never fall through and get recorded as if it
     // were an exercise with fake reps/series/rpe data.
     const isBloqueDivider = /^BLOQUE\s*(\d+|UNO|DOS|TRES|CUATRO|CINCO|SEIS|SIETE|OCHO|NUEVE|DIEZ)?$/.test(upper);
+    if(DRIVE_WRAPPER_HEADERS.has(upper)){
+      // Pure wrapper row (e.g. "DESARROLLO") — skip outright, same as a
+      // PAUSA row: it never becomes a block. Also reset curSectionName —
+      // otherwise a "BLOQUE UNO" appearing right after it would wrongly
+      // inherit whatever real section (Movilidad, Activación...) came
+      // earlier in the day, since this wrapper itself no longer updates
+      // curSectionName the way it used to when it was block-creating.
+      curSectionName=null;
+      continue;
+    }
     if(DRIVE_SECTION_HEADERS.has(upper) || isBloqueDivider || (!isSkippable && (looksLikeHeaderWithWeeks || looksLikeColumnHeaderRow || looksLikeBlankHeader))){
       // Recognized name, OR an unrecognized header we've never seen before —
       // exercise rows always have reps/data in the following columns, so a
@@ -728,20 +781,29 @@ function driveParseDayBlocks(rows){
       const isGenericHeaderLabel = /^(REPS|SERIES|VUELTAS|TIEMPO|KG\/?CM|SEMANA\s*\d*)$/i.test(upper);
       if(curBlock && curBlock.exercises.length===0 && isGenericHeaderLabel){
         hasWeekCols = hasWeekCols || looksLikeHeaderWithWeeks || hasKgCol;
-        if(hasSeriesCol) weekStride = 3;
+        if(detectedStride) weekStride = detectedStride;
+        else if(hasSeriesCol) weekStride = 3;
+        cmOffset = detectedCmOffset;
+        tiempoOffset = detectedTiempoOffset;
+        kgOffset = detectedKgOffset!=null ? detectedKgOffset : (cmOffset==null && tiempoOffset==null ? weekStride-1 : null);
         groupStart=0;
         continue;
       }
       if(curBlock && curBlock.exercises.length===0) blocks.pop(); // drop empty placeholder left by a category-only row (e.g. "Desarrollo")
       let blockName=driveTitleCase(label);
-      if(isBloqueDivider && curSectionName){
-        // "BLOQUE UNO/DOS/TRES" are sub-divisions of whatever named section
-        // (Desarrollo, Potencia...) came right before them in the sheet —
-        // carry that context into the name instead of a bare "Bloque Uno"
-        // with no indication of which section it belongs to.
-        blockName=`${curSectionName} - ${blockName}`;
+      if(isBloqueDivider){
+        // "BLOQUE UNO/DOS/TRES" are sub-divisions of whatever REAL named
+        // section (Potencia, Fuerza...) came before them — but a bloque
+        // divider must never adopt ITSELF as that parent context (this
+        // row's own "BLOQUE UNO" label can appear twice in a row — once on
+        // the SEMANA-header line, once on the REPS/SERIES/KG line — and
+        // treating the first as a parent for the second produced a
+        // doubled "Bloque Uno - Bloque Uno" name). Only prefix when a
+        // distinct real section name is already set; never update
+        // curSectionName from a bloque divider's own label.
+        if(curSectionName) blockName=`${curSectionName} - ${blockName}`;
       } else {
-        // Any other header (a recognized section like "Desarrollo", or an
+        // Any other header (a recognized section like "Fuerza", or an
         // unrecognized-but-real title) becomes the new "parent" section that
         // subsequent Bloque dividers will attach to.
         curSectionName=driveTitleCase(label);
@@ -749,7 +811,10 @@ function driveParseDayBlocks(rows){
       curBlock={name:blockName, type:(upper.includes("MOVILIDAD")||upper.includes("CALENTAMIENTO"))?"warmup":"block", exercises:[]};
       blocks.push(curBlock);
       hasWeekCols = looksLikeHeaderWithWeeks || hasKgCol;
-      weekStride = hasSeriesCol ? 3 : 2;
+      weekStride = detectedStride || (hasSeriesCol ? 3 : 2);
+      cmOffset = detectedCmOffset;
+      tiempoOffset = detectedTiempoOffset;
+      kgOffset = detectedKgOffset!=null ? detectedKgOffset : (cmOffset==null && tiempoOffset==null ? weekStride-1 : null);
       groupStart=0;
       continue;
     }
@@ -787,33 +852,36 @@ function driveParseDayBlocks(rows){
     if(!curBlock){ curBlock={name:"Bloque",type:"block",exercises:[]}; blocks.push(curBlock); }
     const weeks=[0,1,2,3].map(wi=>{
       let r=(rest[wi*weekStride]||"").trim();
-      let kg=(hasWeekCols?(rest[wi*weekStride+weekStride-1]||""):"").trim();
-      if(kg===r) kg="";
-      if(kg==="-") kg="";
-      return {reps:r, kg};
+      let kg=(hasWeekCols && kgOffset!=null?(rest[wi*weekStride+kgOffset]||""):"").trim();
+      let cm=(hasWeekCols && cmOffset!=null?(rest[wi*weekStride+cmOffset]||""):"").trim();
+      let tiempo=(hasWeekCols && tiempoOffset!=null?(rest[wi*weekStride+tiempoOffset]||""):"").trim();
+      if(kg===r) kg=""; if(kg==="-") kg="";
+      if(cm===r) cm=""; if(cm==="-") cm="";
+      if(tiempo===r) tiempo=""; if(tiempo==="-") tiempo="";
+      return {reps:r, kg, cm, tiempo};
     });
-    // The "extra" value column (stored as week.kg) defaults to kilos, but a
-    // coach can mark an individual exercise's cell as seconds (trailing ")
-    // or centimeters (trailing "cm") when that exercise measures time or
-    // distance instead of weight — e.g. 30" for a timed plank, 40cm for a
-    // box-jump height. Detected once from whichever week has a value, then
-    // stripped from every week so the stored number is clean.
-    const kgRaw = (weeks.find(w=>w.kg)||{}).kg || "";
-    let extraType = "kg";
-    if(/"\s*$/.test(kgRaw)) extraType = "secs";
-    else if(/cm\s*$/i.test(kgRaw)) extraType = "cm";
-    if(extraType!=="kg"){
-      weeks.forEach(w=>{
-        if(!w.kg) return;
-        w.kg = extraType==="secs" ? w.kg.replace(/"\s*$/,"").trim() : w.kg.replace(/cm\s*$/i,"").trim();
-      });
+    // Some older templates only have ONE combined column for the "extra"
+    // value (header just says "KG" or "KG/CM", no separate CM/TIEMPO
+    // columns) — for those, a coach marks an individual exercise's cell as
+    // seconds (trailing ") or centimeters (trailing "cm") when that one
+    // exercise measures time or distance instead of weight, e.g. 30" for a
+    // timed plank, 40cm for a box-jump height. Only reinterpret that way
+    // when there's no dedicated CM/TIEMPO column to read from directly —
+    // when there is, each column already means exactly what it says.
+    if(cmOffset==null && tiempoOffset==null){
+      const kgRaw = (weeks.find(w=>w.kg)||{}).kg || "";
+      if(/"\s*$/.test(kgRaw)){
+        weeks.forEach(w=>{ if(w.kg){ w.tiempo=w.kg.replace(/"\s*$/,"").trim(); w.kg=""; } });
+      } else if(/cm\s*$/i.test(kgRaw)){
+        weeks.forEach(w=>{ if(w.kg){ w.cm=w.kg.replace(/cm\s*$/i,"").trim(); w.kg=""; } });
+      }
     }
     const repsW1=weeks[0].reps;
     const isSecs=repsW1.includes('"');
     curBlock.exercises.push({
       name:driveTitleCase(label), sets:3, measType:isSecs?"secs":"reps",
       reps:isSecs?"":repsW1, secs:isSecs?repsW1.replace(/"/g,""):"", rest:"60s",
-      notes:"", weeks, rpe:["","","",""], extraType, _row:idx, _hasWeekCols:hasWeekCols
+      notes:"", weeks, rpe:["","","",""], _row:idx, _hasWeekCols:hasWeekCols
     });
   }
   return blocks;
@@ -864,10 +932,12 @@ function buildGridFromRoutine(routine){
         const weekVals=[];
         weeks.forEach(w=>{
           weekVals.push(w.reps||"");
-          // Re-attach the marker (") or "cm" the parser strips on read, so a
-          // round-trip write→re-sync doesn't silently turn a timed/distance
-          // exercise back into kilos.
-          const kgOut = w.kg ? (ex.extraType==="secs" ? `${w.kg}"` : ex.extraType==="cm" ? `${w.kg}cm` : w.kg) : "";
+          // This plain (unmerged) grid only has room for ONE extra column
+          // per week — same layout it always had — so when kg/cm/tiempo
+          // are all filled in only the first present one round-trips here;
+          // re-attach its marker (") or "cm" so a write→re-sync doesn't
+          // silently turn a timed/distance exercise back into kilos.
+          const kgOut = w.kg ? w.kg : w.cm ? `${w.cm}cm` : w.tiempo ? `${w.tiempo}"` : "";
           weekVals.push(kgOut);
         });
         rows.push(fill([...rep3(ex.name.toUpperCase()), ...weekVals]));
@@ -1952,7 +2022,9 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                                   <span className={`ex-pill ${isTime?"time-pill":""}`}>
                                     {isTime?<><IconClock/> {formatTime(wd.reps)}</>:`${wd.reps} reps`}
                                   </span>
-                                  {wd.kg&&(ex.extraType==="secs"?<span className="ex-pill">⏱ {wd.kg}s</span>:ex.extraType==="cm"?<span className="ex-pill">📏 {wd.kg}cm</span>:<span className="ex-pill">🏋 {wd.kg} kg</span>)}
+                                  {wd.kg&&<span className="ex-pill">🏋 {wd.kg} kg</span>}
+                                  {wd.cm&&<span className="ex-pill">📏 {wd.cm}cm</span>}
+                                  {wd.tiempo&&<span className="ex-pill">⏱ {wd.tiempo}s</span>}
                                   {rpe&&<span className="ex-pill">RPE {rpe}</span>}
                                   {ex.rest&&ex.rest!=="-"&&<span className="ex-pill">⏱ {ex.rest}</span>}
                                 </div>
@@ -2663,9 +2735,13 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
           const weeks = ex.weeks || [mkWeek(),mkWeek(),mkWeek(),mkWeek()];
           let rowVals;
           if(ex._hasWeekCols){
+            // Same single-extra-column limit as buildGridFromRoutine above:
+            // this D:K range only ever had room for reps+ONE extra value
+            // per week, so kg wins if present, otherwise cm/tiempo (marked
+            // so a later re-sync reads it back correctly).
             rowVals=[]; weeks.forEach(w=>{
               rowVals.push(w.reps||"");
-              const kgOut = w.kg ? (ex.extraType==="secs" ? `${w.kg}"` : ex.extraType==="cm" ? `${w.kg}cm` : w.kg) : "";
+              const kgOut = w.kg ? w.kg : w.cm ? `${w.cm}cm` : w.tiempo ? `${w.tiempo}"` : "";
               rowVals.push(kgOut);
             });
           } else {
@@ -2953,7 +3029,6 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
                           <div className="re-ex-row nums">
                             <label>Series<select className="meas-select" value={ex.sets} onChange={e=>updateExercise(di,bi,ei,"sets",Number(e.target.value))}>{[1,2,3,4,5,6].map(n=><option key={n} value={n}>{n}</option>)}</select></label>
                             <label>Medición<select className="meas-select" value={ex.measType} onChange={e=>updateExercise(di,bi,ei,"measType",e.target.value)}><option value="reps">Repeticiones</option><option value="time">Tiempo (seg)</option></select></label>
-                            <label>Dato extra<select className="meas-select" value={ex.extraType||"kg"} onChange={e=>updateExercise(di,bi,ei,"extraType",e.target.value)}><option value="kg">Kilos</option><option value="secs">Tiempo (seg)</option><option value="cm">Centímetros</option></select></label>
                             {ex.measType==="reps"
                               ?<label>Reps (1–50)<input type="number" min="1" max="50" value={ex.reps} placeholder="xx" onChange={e=>handleRepsChange(di,bi,ei,e.target.value)}/></label>
                               :<label>Segundos<input inputMode="numeric" value={ex.secs} placeholder="xx" onChange={e=>handleSecsChange(di,bi,ei,e.target.value)}/></label>
@@ -2975,11 +3050,18 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
                                 </button>
                                 {expandedWeeks[wKey]&&(
                                   <div style={{marginTop:8,display:"flex",flexDirection:"column",gap:6,background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:10}}>
+                                    {/* Kg, Cm y Tiempo son independientes: un ejercicio puede tener
+                                        más de uno cargado a la vez (ej. subida al cajón con kg y
+                                        altura en cm), así que se editan como tres campos separados
+                                        en vez de un único "dato extra" — cada uno se muestra en el
+                                        alumno solo si tiene valor. */}
                                     {[0,1,2,3].map(wi=>(
-                                      <div key={wi} style={{display:"grid",gridTemplateColumns:"64px 1fr 1fr 70px",gap:6,alignItems:"center"}}>
+                                      <div key={wi} style={{display:"grid",gridTemplateColumns:"56px 1fr 1fr 1fr 1fr 60px",gap:6,alignItems:"center"}}>
                                         <span style={{fontSize:11,color:"var(--text3)",fontWeight:700,textTransform:"uppercase"}}>Sem {wi+1}</span>
                                         <input className="re-field" placeholder={isSecsEx?"Segundos":"Reps"} value={weeks[wi].reps} onChange={e=>updateExerciseWeek(di,bi,ei,wi,"reps",e.target.value)} style={{margin:0}}/>
-                                        <input className="re-field" placeholder={ex.extraType==="secs"?"Seg":ex.extraType==="cm"?"Cm":"Kg"} value={weeks[wi].kg} onChange={e=>updateExerciseWeek(di,bi,ei,wi,"kg",e.target.value)} style={{margin:0}}/>
+                                        <input className="re-field" placeholder="Kg" value={weeks[wi].kg} onChange={e=>updateExerciseWeek(di,bi,ei,wi,"kg",e.target.value)} style={{margin:0}}/>
+                                        <input className="re-field" placeholder="Cm" value={weeks[wi].cm||""} onChange={e=>updateExerciseWeek(di,bi,ei,wi,"cm",e.target.value)} style={{margin:0}}/>
+                                        <input className="re-field" placeholder="Tiempo" value={weeks[wi].tiempo||""} onChange={e=>updateExerciseWeek(di,bi,ei,wi,"tiempo",e.target.value)} style={{margin:0}}/>
                                         <input className="re-field" placeholder="RPE" value={rpe[wi]} onChange={e=>updateExerciseRPE(di,bi,ei,wi,e.target.value)} style={{margin:0}}/>
                                       </div>
                                     ))}

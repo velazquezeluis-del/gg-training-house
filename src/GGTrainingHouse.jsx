@@ -306,7 +306,12 @@ function GGApp() {
 const KEYS = { users: "gg_users", routines: "gg_routines", photos: "gg_photos", log: "gg_log", pins: "gg_pins", info: "gg_info", device: "gg_device", weekReset: "gg_week_reset" };
 
 const mkWeek = ()=>({reps:"",kg:""});
-const mkEx = (o={}) => ({ name:"", sets:3, measType:"reps", reps:"", secs:"", rest:"60s", notes:"", weeks:[mkWeek(),mkWeek(),mkWeek(),mkWeek()], rpe:["","","",""], ...o });
+// extraType tells the UI what the exercise's "extra" number (stored in each
+// week's kg field) actually represents: peso en kg (default), tiempo en
+// segundos, or una distancia en cm. Only one of these ever applies per
+// exercise — reps is always present, and this is the single optional
+// second value alongside it.
+const mkEx = (o={}) => ({ name:"", sets:3, measType:"reps", reps:"", secs:"", rest:"60s", notes:"", weeks:[mkWeek(),mkWeek(),mkWeek(),mkWeek()], rpe:["","","",""], extraType:"kg", ...o });
 const mkBlock = (type="block", name="") => ({ id: Date.now()+Math.random(), type, name, exercises:[mkEx()] });
 const mkWarmup = () => ({ id: Date.now()+Math.random(), type:"warmup", name:"Entrada en calor / Movilidad", exercises:[mkEx()] });
 // Reads the value for a given program week (1-4), falling back to the old flat
@@ -787,12 +792,28 @@ function driveParseDayBlocks(rows){
       if(kg==="-") kg="";
       return {reps:r, kg};
     });
+    // The "extra" value column (stored as week.kg) defaults to kilos, but a
+    // coach can mark an individual exercise's cell as seconds (trailing ")
+    // or centimeters (trailing "cm") when that exercise measures time or
+    // distance instead of weight — e.g. 30" for a timed plank, 40cm for a
+    // box-jump height. Detected once from whichever week has a value, then
+    // stripped from every week so the stored number is clean.
+    const kgRaw = (weeks.find(w=>w.kg)||{}).kg || "";
+    let extraType = "kg";
+    if(/"\s*$/.test(kgRaw)) extraType = "secs";
+    else if(/cm\s*$/i.test(kgRaw)) extraType = "cm";
+    if(extraType!=="kg"){
+      weeks.forEach(w=>{
+        if(!w.kg) return;
+        w.kg = extraType==="secs" ? w.kg.replace(/"\s*$/,"").trim() : w.kg.replace(/cm\s*$/i,"").trim();
+      });
+    }
     const repsW1=weeks[0].reps;
     const isSecs=repsW1.includes('"');
     curBlock.exercises.push({
       name:driveTitleCase(label), sets:3, measType:isSecs?"secs":"reps",
       reps:isSecs?"":repsW1, secs:isSecs?repsW1.replace(/"/g,""):"", rest:"60s",
-      notes:"", weeks, rpe:["","","",""], _row:idx, _hasWeekCols:hasWeekCols
+      notes:"", weeks, rpe:["","","",""], extraType, _row:idx, _hasWeekCols:hasWeekCols
     });
   }
   return blocks;
@@ -841,7 +862,14 @@ function buildGridFromRoutine(routine){
         }
         const weeks = ex.weeks || [mkWeek(),mkWeek(),mkWeek(),mkWeek()];
         const weekVals=[];
-        weeks.forEach(w=>{ weekVals.push(w.reps||""); weekVals.push(w.kg||""); });
+        weeks.forEach(w=>{
+          weekVals.push(w.reps||"");
+          // Re-attach the marker (") or "cm" the parser strips on read, so a
+          // round-trip write→re-sync doesn't silently turn a timed/distance
+          // exercise back into kilos.
+          const kgOut = w.kg ? (ex.extraType==="secs" ? `${w.kg}"` : ex.extraType==="cm" ? `${w.kg}cm` : w.kg) : "";
+          weekVals.push(kgOut);
+        });
         rows.push(fill([...rep3(ex.name.toUpperCase()), ...weekVals]));
         if(ex.rpe && ex.rpe.some(v=>v)){
           const rpeVals=[];
@@ -1924,7 +1952,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                                   <span className={`ex-pill ${isTime?"time-pill":""}`}>
                                     {isTime?<><IconClock/> {formatTime(wd.reps)}</>:`${wd.reps} reps`}
                                   </span>
-                                  {wd.kg&&<span className="ex-pill">🏋 {wd.kg} kg</span>}
+                                  {wd.kg&&(ex.extraType==="secs"?<span className="ex-pill">⏱ {wd.kg}s</span>:ex.extraType==="cm"?<span className="ex-pill">📏 {wd.kg}cm</span>:<span className="ex-pill">🏋 {wd.kg} kg</span>)}
                                   {rpe&&<span className="ex-pill">RPE {rpe}</span>}
                                   {ex.rest&&ex.rest!=="-"&&<span className="ex-pill">⏱ {ex.rest}</span>}
                                 </div>
@@ -2635,7 +2663,11 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
           const weeks = ex.weeks || [mkWeek(),mkWeek(),mkWeek(),mkWeek()];
           let rowVals;
           if(ex._hasWeekCols){
-            rowVals=[]; weeks.forEach(w=>{ rowVals.push(w.reps||""); rowVals.push(w.kg||""); });
+            rowVals=[]; weeks.forEach(w=>{
+              rowVals.push(w.reps||"");
+              const kgOut = w.kg ? (ex.extraType==="secs" ? `${w.kg}"` : ex.extraType==="cm" ? `${w.kg}cm` : w.kg) : "";
+              rowVals.push(kgOut);
+            });
           } else {
             const v = weeks[0].reps || "";
             rowVals = Array(8).fill(v);
@@ -2921,6 +2953,7 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
                           <div className="re-ex-row nums">
                             <label>Series<select className="meas-select" value={ex.sets} onChange={e=>updateExercise(di,bi,ei,"sets",Number(e.target.value))}>{[1,2,3,4,5,6].map(n=><option key={n} value={n}>{n}</option>)}</select></label>
                             <label>Medición<select className="meas-select" value={ex.measType} onChange={e=>updateExercise(di,bi,ei,"measType",e.target.value)}><option value="reps">Repeticiones</option><option value="time">Tiempo (seg)</option></select></label>
+                            <label>Dato extra<select className="meas-select" value={ex.extraType||"kg"} onChange={e=>updateExercise(di,bi,ei,"extraType",e.target.value)}><option value="kg">Kilos</option><option value="secs">Tiempo (seg)</option><option value="cm">Centímetros</option></select></label>
                             {ex.measType==="reps"
                               ?<label>Reps (1–50)<input type="number" min="1" max="50" value={ex.reps} placeholder="xx" onChange={e=>handleRepsChange(di,bi,ei,e.target.value)}/></label>
                               :<label>Segundos<input inputMode="numeric" value={ex.secs} placeholder="xx" onChange={e=>handleSecsChange(di,bi,ei,e.target.value)}/></label>
@@ -2946,7 +2979,7 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
                                       <div key={wi} style={{display:"grid",gridTemplateColumns:"64px 1fr 1fr 70px",gap:6,alignItems:"center"}}>
                                         <span style={{fontSize:11,color:"var(--text3)",fontWeight:700,textTransform:"uppercase"}}>Sem {wi+1}</span>
                                         <input className="re-field" placeholder={isSecsEx?"Segundos":"Reps"} value={weeks[wi].reps} onChange={e=>updateExerciseWeek(di,bi,ei,wi,"reps",e.target.value)} style={{margin:0}}/>
-                                        <input className="re-field" placeholder="Kg" value={weeks[wi].kg} onChange={e=>updateExerciseWeek(di,bi,ei,wi,"kg",e.target.value)} style={{margin:0}}/>
+                                        <input className="re-field" placeholder={ex.extraType==="secs"?"Seg":ex.extraType==="cm"?"Cm":"Kg"} value={weeks[wi].kg} onChange={e=>updateExerciseWeek(di,bi,ei,wi,"kg",e.target.value)} style={{margin:0}}/>
                                         <input className="re-field" placeholder="RPE" value={rpe[wi]} onChange={e=>updateExerciseRPE(di,bi,ei,wi,e.target.value)} style={{margin:0}}/>
                                       </div>
                                     ))}

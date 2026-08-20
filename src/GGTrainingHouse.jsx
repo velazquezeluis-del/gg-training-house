@@ -13,6 +13,84 @@ function driveFilesListUrl(){
 }
 const GYM_LAT = -34.730867;
 const GYM_LNG = -58.292175;
+// Planilla de pagos (fuera de la carpeta de rutinas). No apunta a una sola
+// pestaña por gid: el coach usa una pestaña "ALUMNOS" para el historial y
+// además crea una pestaña NUEVA por mes en curso (ej. "AGOSTO", y el próximo
+// mes "SEPTIEMBRE") — apuntar a un gid fijo se habría roto en cuanto
+// apareciera esa pestaña nueva. En cambio, se recorren TODAS las pestañas de
+// la planilla y se procesa cualquiera que tenga forma de tabla de pagos
+// (detectado por la presencia de un encabezado "ALUMNOS"), ignorando el
+// resto (Horarios, Balance, Materiales, etc.) — así funciona sin importar
+// cuántas pestañas de mes existan ni cómo se llamen.
+const CUOTAS_SHEET_ID = "1UvU2hv9_MVGdN2uQpMaA7Vx46UoltNJXyJ3Q6gPrFfU";
+const MESES_ES = {ENERO:1,FEBRERO:2,MARZO:3,ABRIL:4,MAYO:5,JUNIO:6,JULIO:7,AGOSTO:8,SEPTIEMBRE:9,SETIEMBRE:9,OCTUBRE:10,NOVIEMBRE:11,DICIEMBRE:12};
+// Scans every row of the payment sheet for a Spanish month name in any
+// column (each month's table lives at a different, and even duplicated,
+// column offset — there are two side-by-side tables per section) — the
+// student's name always sits exactly 2 columns to the right of the month
+// name in this template, and a nearby "d/m/yyyy" payment-date cell (if
+// present a few columns further, e.g. FECHA DE PAGO) supplies the year;
+// falls back to the current year when no date is found nearby.
+// A tab "looks like" a payments table only if it literally has an "ALUMNOS"
+// header cell somewhere — cheap, reliable signature that safely excludes
+// unrelated tabs (Horarios, Balance, Materiales) which don't share it, so
+// scanning every tab in the spreadsheet doesn't pick up noise from them.
+function sheetLooksLikePagos(grid){
+  return grid.some(row=>row.some(c=>(c||"").trim().toUpperCase()==="ALUMNOS"));
+}
+function extractPagosFromGrid(grid){
+  const payments=[];
+  for(const row of grid){
+    for(let c=0;c<row.length;c++){
+      const cell=(row[c]||"").trim().toUpperCase();
+      const monthNum = MESES_ES[cell];
+      if(!monthNum) continue;
+      const nameCell=(row[c+2]||"").trim();
+      if(!nameCell || nameCell.toUpperCase()==="ALUMNOS") continue;
+      let year=new Date().getFullYear();
+      for(let k=c+3;k<Math.min(row.length,c+9);k++){
+        const m=(row[k]||"").match(/\d{1,2}\/\d{1,2}\/(\d{4})/);
+        if(m){ year=parseInt(m[1],10); break; }
+      }
+      payments.push({name:nameCell, year, month:monthNum});
+    }
+  }
+  return payments;
+}
+function normNameTokens(s){
+  return (s||"")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"") // strip accents
+    .toUpperCase().replace(/[.,]/g,"")
+    .split(/\s+/).filter(Boolean);
+}
+// A student's app name matches a sheet entry only if EVERY token in the app
+// name corresponds to some token in the sheet name — either identical, or
+// one is a (3+ letter) prefix of the other, so "ALE ROCA" matches "ALEJANDRO
+// ROCA"; a single-letter token matches as an initial, so "KAREN G." matches
+// "KAREN GOMEZ"; and same-length tokens differing by exactly one character
+// match too, so "VELAZQUEZ" matches the common typo "VELAZQUES" — but this
+// deliberately stays strict otherwise, rather than fully fuzzy: multi-person
+// app entries like "SANTIAGO y BENJA LAGO" won't match a single-person sheet
+// row, and real near-miss typos on a WHOLE name like "ARZOGARAY" vs
+// "DORZAGARAY" still won't match. Missing a real match just leaves that
+// student for the coach to set by hand — matching the WRONG person would
+// wrongly change their payment status, which is worse.
+function oneEditApart(x,y){
+  if(x.length!==y.length || x.length<4) return false; // too short = too risky to typo-match
+  let diff=0;
+  for(let i=0;i<x.length;i++){ if(x[i]!==y[i]){ diff++; if(diff>1) return false; } }
+  return diff===1;
+}
+function pagosNameMatches(appName, sheetName){
+  const a=normNameTokens(appName), b=normNameTokens(sheetName);
+  if(!a.length) return false;
+  return a.every(at=>b.some(bt=>
+    at===bt ||
+    (at.length>=3&&bt.startsWith(at)) || (bt.length>=3&&at.startsWith(bt)) ||
+    (at.length===1&&bt.startsWith(at)) || (bt.length===1&&at.startsWith(bt)) || // initials
+    oneEditApart(at,bt)
+  ));
+}
 const GYM_RADIUS_M = 150;
 
 // Supabase config
@@ -578,6 +656,27 @@ function dateKeyFromTs(ts) {
   const d = new Date(ts);
   const p = n => String(n).padStart(2,'0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
+function currentMonthKey(){
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+// How many months behind a student's payment is, based on the coach-entered
+// "último mes pagado" (u.ultimoPago, "YYYY-MM"). 0 or less = al día, 1 =
+// owes only the current month (warn but let them train), 2+ = two or more
+// months behind (block access). Students who don't have ultimoPago set yet
+// (not migrated from the old on/off "cuota" toggle) fall back to that old
+// boolean so nobody gets silently locked out before the coach fills it in.
+function monthsOwed(u){
+  if(u && u.ultimoPago){
+    const [yStr,mStr] = u.ultimoPago.split('-');
+    const y=parseInt(yStr,10), m=parseInt(mStr,10);
+    if(y && m){
+      const now=new Date();
+      return (now.getFullYear()-y)*12 + (now.getMonth()+1-m);
+    }
+  }
+  return (u && u.cuota===false) ? 2 : 0;
 }
 
 // ---- Google Sheets -> routine JSON parser (mirrors the validated prototype) ----
@@ -1158,6 +1257,8 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
   const [namePopupValue, setNamePopupValue] = useState("");
   const [namePopupError, setNamePopupError] = useState("");
   const namePopupCheckedRef = useRef(null);
+  const [showCuotaWarning, setShowCuotaWarning] = useState(false);
+  const cuotaWarningCheckedRef = useRef(null);
   const photoRef = useRef(null);
   const [cropFile, setCropFile] = useState(null);
   const restRef = useRef(null);
@@ -1197,6 +1298,21 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
       if(!seen) setShowNamePopup(true);
     });
   },[selected]);
+
+  // Debe exactamente el mes en curso (1 mes de atraso): avisar una vez por
+  // mes, sin bloquear el acceso — el bloqueo total recién entra a partir de
+  // 2 meses (ver la pantalla "Cuota pendiente" más abajo).
+  useEffect(()=>{
+    if(!selected) return;
+    const key=`${selected.id}-${currentMonthKey()}`;
+    if(cuotaWarningCheckedRef.current===key) return;
+    const u=users.find(x=>x.id===selected.id);
+    if(!u || monthsOwed(u)!==1) return;
+    cuotaWarningCheckedRef.current = key;
+    loadData(`gg_cuota_warn_seen_${key}`, false).then(seen=>{
+      if(!seen) setShowCuotaWarning(true);
+    });
+  },[selected, users]);
 
   useEffect(()=>{
     // Check if WebAuthn is available
@@ -1606,13 +1722,28 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
           </div>
         </div>
       )}
+      {showCuotaWarning&&selected&&(
+        <div className="rest-overlay" onClick={()=>{}}>
+          <div className="rest-box" style={{width:"90%",maxWidth:340,padding:22,textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:34,marginBottom:8}}>💳</div>
+            <div className="rest-label" style={{margin:"0 0 10px",color:"var(--red)"}}>CUOTA PENDIENTE</div>
+            <p style={{fontSize:13.5,color:"var(--text2)",lineHeight:1.5,marginBottom:16}}>
+              Tu cuota de este mes todavía no está registrada. Regularizala con el profe para seguir entrenando sin problemas.
+            </p>
+            <button className="login-btn" style={{marginTop:4}} onClick={async()=>{
+              await saveData(`gg_cuota_warn_seen_${selected.id}-${currentMonthKey()}`, true);
+              setShowCuotaWarning(false);
+            }}>Entendido</button>
+          </div>
+        </div>
+      )}
       {showNamePopup&&selected&&(
         <div className="rest-overlay" onClick={()=>{}}>
           <div className="rest-box" style={{width:"90%",maxWidth:340,padding:22,textAlign:"center"}} onClick={e=>e.stopPropagation()}>
             <div style={{fontSize:34,marginBottom:8}}>🏆</div>
             <div className="rest-label" style={{margin:"0 0 10px"}}>COMPLETÁ TU NOMBRE</div>
             <p style={{fontSize:13.5,color:"var(--text2)",lineHeight:1.5,marginBottom:16}}>
-              Para que aparezcas bien identificado en el Top Entrenamientos, escribí tu nombre y apellido completos.
+              Para que aparezcas bien identificado en el Ranking Alumnos, escribí tu nombre y apellido completos.
             </p>
             <input className="login-input" placeholder="Nombre y apellido" value={namePopupValue}
               onChange={e=>{setNamePopupValue(e.target.value);setNamePopupError("");}} autoFocus/>
@@ -1756,7 +1887,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
               {unregistered.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
             <input className="login-input" placeholder="Elegí un usuario" value={loginUsername} onChange={e=>{setLoginUsername(e.target.value.replace(/\s/g,""));setLoginError("");}} style={{marginTop:10}}/>
-            <input className="login-input" placeholder="Nombre y apellido (para el Top Entrenamientos)" value={loginDisplayName} onChange={e=>{setLoginDisplayName(e.target.value);setLoginError("");}} style={{marginTop:10}}/>
+            <input className="login-input" placeholder="Nombre y apellido (para el Ranking Alumnos)" value={loginDisplayName} onChange={e=>{setLoginDisplayName(e.target.value);setLoginError("");}} style={{marginTop:10}}/>
             <div className="pw-wrap" style={{marginTop:10}}>
               <input className="login-input" type={showRegPass?"text":"password"} inputMode="numeric" placeholder="Elegí 4 dígitos" maxLength={4}
                 value={loginPass} onChange={e=>{setLoginPass(e.target.value.replace(/\D/g,"").slice(0,4));setLoginError("");}}/>
@@ -1835,13 +1966,21 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
       )}
 
       {!selected&&!loginFlow&&(()=>{
-        // Top 5 leaderboard
-        const weekLog = trainLog;
+        // Top 5 leaderboard — scoped to the current calendar month (previously
+        // this counted every training day ever logged, with no date filter at
+        // all, despite the empty-state text implying "this week"). Filtering
+        // by the "YYYY-MM" prefix of each logged date keeps this a fresh,
+        // monthly ranking instead of an all-time cumulative one.
+        const now=new Date();
+        const monthPrefix=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+        const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+        const monthLabel=monthNames[now.getMonth()];
+        const monthLog = trainLog;
         const scores = users
           .filter(u=>u.active!==false && !u.ocultoTop)
           .map(u=>{
-            const log = weekLog[u.id]||{};
-            const count = Object.values(log).filter(Boolean).length;
+            const log = monthLog[u.id]||{};
+            const count = Object.keys(log).filter(d=>log[d] && d.startsWith(monthPrefix)).length;
             return {id:u.id, name:u.displayName||u.name, mostrarFoto:u.mostrarFoto!==false, count};
           })
           .filter(u=>u.count>0)
@@ -1852,10 +1991,10 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
           <div style={{margin:"12px 16px",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,overflow:"hidden"}}>
             <div style={{padding:"10px 14px",background:"var(--surface2)",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:8}}>
               <span style={{fontSize:16}}>🏆</span>
-              <span style={{fontFamily:"var(--font-display)",fontSize:14,fontWeight:700,letterSpacing:.5,textTransform:"uppercase",color:"var(--gold)"}}>Top entrenamientos</span>
+              <span style={{fontFamily:"var(--font-display)",fontSize:14,fontWeight:700,letterSpacing:.5,textTransform:"uppercase",color:"var(--gold)"}}>Ranking Alumnos - {monthLabel}</span>
             </div>
             {!scores.length&&(
-              <div style={{padding:"16px 14px",textAlign:"center",fontSize:13,color:"var(--text3)"}}>Todavía no hay entrenamientos esta semana</div>
+              <div style={{padding:"16px 14px",textAlign:"center",fontSize:13,color:"var(--text3)"}}>Todavía no hay entrenamientos este mes</div>
             )}
             {scores.map((u,i)=>(
               <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderBottom:i<scores.length-1?"1px solid var(--border)":"none"}}>
@@ -1952,7 +2091,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
 
       {selected&&(
         <div className="routine-card">
-          {selected&&users.find(u=>u.id===selected.id)?.cuota===false?(
+          {selected&&monthsOwed(users.find(u=>u.id===selected.id))>=2?(
             <div className="no-routine" style={{gap:16}}>
               <div style={{fontSize:48}}>🔒</div>
               <p style={{fontSize:18,fontWeight:700,color:"var(--red)"}}>Cuota pendiente</p>
@@ -2217,7 +2356,7 @@ function MemberView({ users, setUsers, photos, setPhotos, gymInfo, onInsideChang
                     setUsers(us=>us.map(x=>x.id===selected.id?{...x,mostrarFoto:val}:x));
                     setSelected(s=>s?{...s,mostrarFoto:val}:s);
                   }}/>
-                  Mostrar mi foto en el Top Entrenamientos
+                  Mostrar mi foto en el Ranking Alumnos
                 </label>
                 <button style={{width:"100%",padding:"12px 16px",background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--text)",borderRadius:10,cursor:"pointer",fontSize:14,fontWeight:600,textAlign:"left",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}} onClick={()=>{setSettingsView("password");setSettingsMsg("");}}>
                   <span>🔑 Cambiar contraseña</span><span style={{color:"var(--text3)"}}>›</span>
@@ -2454,6 +2593,8 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
   const selectedUserCardRef=useRef(null);
   const [syncing,setSyncing]=useState(false);
   const [syncMsg,setSyncMsg]=useState('');
+  const [syncingCuotas,setSyncingCuotas]=useState(false);
+  const [cuotaSyncMsg,setCuotaSyncMsg]=useState('');
   const [coachSettingsView,setCoachSettingsView]=useState('main');
   const restoredSelectedUserRef=useRef(false);
 
@@ -2677,6 +2818,81 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
     return token;
   };
 
+  // Reads the payments spreadsheet directly (same Google account/token as the
+  // routine sync above — same OAuth scope already covers Sheets) and sets
+  // each matched student's "último mes pagado" automatically, instead of the
+  // coach typing it in by hand. Names that don't confidently match anyone in
+  // the app are listed in the result message so the coach can fix those
+  // specific ones manually via the month picker — safer than guessing wrong
+  // and locking out someone who's actually paid.
+  const syncCuotas = async () => {
+    setSyncingCuotas(true);
+    setCuotaSyncMsg('Conectando con Google Sheets...');
+    try {
+      const token = await getDriveToken();
+
+      setCuotaSyncMsg('Leyendo todas las pestañas...');
+      const dataResp = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${CUOTAS_SHEET_ID}?includeGridData=true&fields=sheets(properties(title),data(rowData(values(formattedValue))))`,
+        {headers:{Authorization:`Bearer ${token}`}}
+      );
+      const dataJson = await dataResp.json();
+      if(dataJson.error) throw new Error(dataJson.error.message||'Error de Sheets API');
+      const allSheets = dataJson.sheets||[];
+      if(!allSheets.length) throw new Error('La planilla vino vacía.');
+
+      let payments=[];
+      const pagosTabs=[];
+      allSheets.forEach(sheet=>{
+        const grid = buildGridFromSheet(sheet);
+        if(!sheetLooksLikePagos(grid)) return; // no "ALUMNOS" header — not a payments tab, skip
+        pagosTabs.push(sheet.properties?.title||'(sin nombre)');
+        payments = payments.concat(extractPagosFromGrid(grid));
+      });
+      if(!payments.length) throw new Error('No se encontró ninguna pestaña con forma de tabla de pagos (encabezado "ALUMNOS").');
+
+      // For every app student, find every matching sheet payment and keep
+      // only the most recent (year, month) among them.
+      setCuotaSyncMsg('Cruzando nombres...');
+      const updates=[]; // {id, name, ultimoPago}
+      const unmatched=[];
+      users.forEach(u=>{
+        if(u.active===false) return;
+        const matches = payments.filter(p=>pagosNameMatches(u.name, p.name));
+        if(!matches.length){ unmatched.push(u.name); return; }
+        const latest = matches.reduce((best,p)=>{
+          const key=p.year*12+p.month, bestKey=best.year*12+best.month;
+          return key>bestKey ? p : best;
+        });
+        const ym = `${latest.year}-${String(latest.month).padStart(2,'0')}`;
+        if(ym !== (u.ultimoPago||'')) updates.push({id:u.id, name:u.name, ultimoPago:ym});
+      });
+
+      if(updates.length){
+        setCuotaSyncMsg(`Guardando ${updates.length} actualización(es)...`);
+        await Promise.all(updates.map(up=>
+          db.updateUser(up.id,{ultimo_pago:up.ultimoPago}).catch(e=>{
+            console.error(`No se pudo guardar el pago de ${up.name}`,e);
+            unmatched.push(`${up.name} (error al guardar)`);
+          })
+        ));
+        setUsers(us=>us.map(x=>{
+          const up=updates.find(u=>u.id===x.id);
+          return up ? {...x, ultimoPago:up.ultimoPago} : x;
+        }));
+      }
+
+      setCuotaSyncMsg(`✓ Listo (pestañas leídas: ${pagosTabs.join(', ')}): ${updates.length} alumno(s) actualizado(s)`
+        + `${unmatched.length?` — ⚠️ ${unmatched.length} sin match automático: ${unmatched.join(', ')}`:''}`);
+      setTimeout(()=>setCuotaSyncMsg(''), unmatched.length ? 25000 : 8000);
+    } catch(e){
+      console.error(e);
+      setCuotaSyncMsg(`⚠️ Error al sincronizar cuotas: ${e.message||e}`);
+      setTimeout(()=>setCuotaSyncMsg(''),15000);
+    }
+    setSyncingCuotas(false);
+  };
+
   // Auto-sync once an hour, silently — never prompts a Google login popup on
   // its own. If there's no valid cached token yet, it just skips that hour.
   useEffect(()=>{
@@ -2776,6 +2992,10 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
   const showValidation=(msg)=>{ setValidationMsg(msg); clearTimeout(validationTimer.current); validationTimer.current=setTimeout(()=>setValidationMsg(""),3000); };
   const toggleUser=(id)=>{ const u=users.map(x=>x.id===id?{...x,active:!x.active}:x); setUsers(u); db.updateUser(id,{active:!users.find(x=>x.id===id).active}); };
   const toggleCuota=(id)=>{ const u=users.map(x=>x.id===id?{...x,cuota:x.cuota===false?true:false}:x); setUsers(u); db.updateUser(id,{cuota:users.find(x=>x.id===id).cuota===false?true:false}); };
+  const updateUltimoPago=(id,val)=>{
+    setUsers(us=>us.map(x=>x.id===id?{...x,ultimoPago:val}:x));
+    db.updateUser(id,{ultimo_pago:val||null}).catch(e=>console.error('No se pudo guardar el último mes pagado',e));
+  };
   const addUser=()=>{
     if(!newUserName.trim()) return;
     const u=[...users,{id:Date.now(),name:newUserName.trim(),active:true,cuota:true,days:[]}];
@@ -3095,12 +3315,16 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
             <h2>Alumnos <span className="count-badge">{users.length}</span></h2>
             <button className="btn-primary" onClick={()=>setShowNewUser(v=>!v)}><IconPlus/> Nuevo</button>
           </div>
-          <div style={{marginBottom:14}}>
+          <div style={{marginBottom:14,display:"flex",gap:10,flexWrap:"wrap"}}>
             <button className={`btn-sync${syncing?" spinning":""}`} disabled={syncing} onClick={syncWithDrive}>
               <span className="sync-icon"><IconRefresh/></span> {syncing?"Sincronizando...":"Sincronizar con Drive"}
             </button>
+            <button className={`btn-sync${syncingCuotas?" spinning":""}`} disabled={syncingCuotas} onClick={syncCuotas}>
+              <span className="sync-icon"><IconRefresh/></span> {syncingCuotas?"Sincronizando...":"Sincronizar Cuotas"}
+            </button>
           </div>
           {syncMsg&&<div style={{fontSize:13,color:"var(--gold)",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 12px",marginBottom:12}}>{syncMsg}</div>}
+          {cuotaSyncMsg&&<div style={{fontSize:13,color:"var(--gold)",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 12px",marginBottom:12}}>{cuotaSyncMsg}</div>}
 
           {showNewUser&&(
             <div className="new-user-form">
@@ -3176,13 +3400,20 @@ function CoachView({ users,setUsers,photos,setPhotos,gymInfo,setGymInfo,
                   )}
                 </div>
                 <div className="uc-routine" style={{justifyContent:"space-between"}}>
-                  <span className="uc-rlabel">Cuota:</span>
-                  <button className={`btn-toggle ${u.cuota!==false?"on":"off"}`} onClick={()=>toggleCuota(u.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",fontSize:12,fontWeight:700}}>
-                    {u.cuota!==false?<><IconCheck/> Al día</>:<><IconX/> Debe cuota</>}
-                  </button>
+                  <span className="uc-rlabel">Último mes pagado:</span>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <input type="month" value={u.ultimoPago||""} onChange={e=>updateUltimoPago(u.id,e.target.value)}
+                      style={{background:"var(--surface2)",border:"1px solid var(--border)",color:"var(--text)",borderRadius:8,padding:"6px 8px",fontSize:12}}/>
+                    {(()=>{
+                      const owed=monthsOwed(u);
+                      if(owed<=0) return <span className="btn-toggle on" style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",fontSize:12,fontWeight:700}}><IconCheck/> Al día</span>;
+                      if(owed===1) return <span className="btn-toggle" style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",fontSize:12,fontWeight:700,background:"rgba(245,197,24,0.15)",color:"var(--gold)"}}>⚠ Debe este mes</span>;
+                      return <span className="btn-toggle off" style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",fontSize:12,fontWeight:700}}><IconX/> Debe {owed} meses — bloqueado</span>;
+                    })()}
+                  </div>
                 </div>
                 <div className="uc-routine" style={{justifyContent:"space-between"}}>
-                  <span className="uc-rlabel">Top Entrenamientos:</span>
+                  <span className="uc-rlabel">Ranking:</span>
                   <button className={`btn-toggle ${!u.ocultoTop?"on":"off"}`} onClick={()=>{
                     const val=!u.ocultoTop;
                     setUsers(us=>us.map(x=>x.id===u.id?{...x,ocultoTop:val}:x));
@@ -3425,7 +3656,7 @@ function AppInner() {
           timeout(8000)
         ]);
         setUsers(supaUsers?.length ? supaUsers.map(u=>({
-          id: u.id, name: u.name, active: u.active, cuota: u.cuota,
+          id: u.id, name: u.name, active: u.active, cuota: u.cuota, ultimoPago: u.ultimo_pago||"",
           photo: u.photo, startDate: u.start_date, days: u.days||[], driveFileId: u.drive_file_id, pin: u.pin, username: u.username,
           displayName: u.display_name, mostrarFoto: u.mostrar_foto!==false, ocultoTop: !!u.oculto_top
         })) : defaultUsers);
